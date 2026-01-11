@@ -101,6 +101,33 @@ docker exec -it zeus-terminal /bin/sh
 - **Don't add `console.log` in production** - Use the Logger utility instead
 - **Don't bypass CSRF** - All POST endpoints require CSRF token
 
+## Git Conventions
+```bash
+# Branch naming
+feature/description    # New features
+fix/description        # Bug fixes
+refactor/description   # Code improvements
+
+# Commit message format
+type: short description
+
+Types: feat, fix, refactor, docs, test, chore
+
+# Examples
+feat: add theme switching API
+fix: resolve resize race condition
+refactor: consolidate output buffers
+```
+
+**Before committing:**
+```bash
+npm run typecheck && npm run lint && npm test
+git add -A && git status  # Review changes
+git commit -m "type: description"
+```
+
+**Author:** Hercules <noreply@herakles.dev>
+
 ## Architecture
 ```
 Client (src/client/)                Server (src/server/)
