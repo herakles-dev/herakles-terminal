@@ -1,0 +1,302 @@
+import { spawn, IPty } from 'node-pty';
+import * as fs from 'fs';
+import * as path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
+
+export class TmuxError extends Error {
+  constructor(
+    message: string,
+    public code: 'SESSION_EXISTS' | 'SESSION_NOT_FOUND' | 'SOCKET_ERROR' | 'SPAWN_ERROR' | 'INVALID_UUID'
+  ) {
+    super(message);
+    this.name = 'TmuxError';
+  }
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export class TmuxManager {
+  private baseSocketDir: string;
+  private configPath: string;
+
+  constructor(
+    baseSocketDir = '/tmp/zeus-tmux',
+    configPath = '/home/hercules/herakles-terminal/config/tmux.conf'
+  ) {
+    this.baseSocketDir = baseSocketDir;
+    this.configPath = configPath;
+    this.ensureBaseDir();
+  }
+
+  private ensureBaseDir(): void {
+    if (!fs.existsSync(this.baseSocketDir)) {
+      fs.mkdirSync(this.baseSocketDir, { recursive: true, mode: 0o700 });
+    }
+  }
+
+  private validateUUID(sessionId: string): void {
+    if (!UUID_REGEX.test(sessionId)) {
+      throw new TmuxError(`Invalid session UUID: ${sessionId}`, 'INVALID_UUID');
+    }
+  }
+
+  private getSocketPath(sessionId: string): string {
+    return path.join(this.baseSocketDir, sessionId);
+  }
+
+  private getSessionName(sessionId: string): string {
+    return `zeus-${sessionId}`;
+  }
+
+  getShellEnvironment(): Record<string, string> {
+    return {
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: 'en_US.UTF-8',
+      LC_ALL: 'en_US.UTF-8',
+    };
+  }
+
+  async createSession(sessionId: string, cols: number, rows: number): Promise<void> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    const socketDir = path.dirname(socketPath);
+    if (!fs.existsSync(socketDir)) {
+      fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
+    }
+
+    if (await this.sessionExists(sessionId)) {
+      throw new TmuxError(`Session ${sessionId} already exists`, 'SESSION_EXISTS');
+    }
+
+    try {
+      const configFlag = fs.existsSync(this.configPath) ? `-f ${this.configPath}` : '';
+      const cmd = `tmux -S ${socketPath} ${configFlag} new-session -d -s ${sessionName} -x ${cols} -y ${rows}`;
+      
+      await execAsync(cmd);
+      fs.chmodSync(socketPath, 0o700);
+    } catch (error) {
+      throw new TmuxError(
+        `Failed to create tmux session: ${(error as Error).message}`,
+        'SPAWN_ERROR'
+      );
+    }
+  }
+
+  async attachSession(sessionId: string): Promise<IPty> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    if (!(await this.sessionExists(sessionId))) {
+      throw new TmuxError(`Session ${sessionId} not found`, 'SESSION_NOT_FOUND');
+    }
+
+    try {
+      const pty = spawn('tmux', ['-S', socketPath, 'attach-session', '-t', sessionName], {
+        name: 'xterm-256color',
+        env: { ...process.env, ...this.getShellEnvironment() },
+      });
+      return pty;
+    } catch (error) {
+      throw new TmuxError(
+        `Failed to attach to session: ${(error as Error).message}`,
+        'SOCKET_ERROR'
+      );
+    }
+  }
+
+  async sessionExists(sessionId: string): Promise<boolean> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    if (!fs.existsSync(socketPath)) {
+      return false;
+    }
+
+    try {
+      await execAsync(`tmux -S ${socketPath} has-session -t ${sessionName} 2>/dev/null`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async killSession(sessionId: string): Promise<void> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    try {
+      await execAsync(`tmux -S ${socketPath} kill-session -t ${sessionName} 2>/dev/null`);
+    } catch {
+    }
+
+    try {
+      if (fs.existsSync(socketPath)) {
+        fs.unlinkSync(socketPath);
+      }
+    } catch {
+    }
+  }
+
+  async resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    if (!(await this.sessionExists(sessionId))) {
+      throw new TmuxError(`Session ${sessionId} not found`, 'SESSION_NOT_FOUND');
+    }
+
+    try {
+      await execAsync(`tmux -S ${socketPath} resize-window -t ${sessionName} -x ${cols} -y ${rows}`);
+    } catch (error) {
+      console.warn(`[TmuxManager] resize-window failed: ${(error as Error).message}`);
+    }
+    
+    try {
+      await execAsync(`tmux -S ${socketPath} resize-pane -t ${sessionName} -x ${cols} -y ${rows}`);
+    } catch (error) {
+      throw new TmuxError(
+        `Failed to resize pane: ${(error as Error).message}`,
+        'SOCKET_ERROR'
+      );
+    }
+  }
+
+  async detectZombieSessions(knownSessionIds: string[]): Promise<string[]> {
+    const zombies: string[] = [];
+
+    for (const sessionId of knownSessionIds) {
+      try {
+        this.validateUUID(sessionId);
+        if (!(await this.sessionExists(sessionId))) {
+          zombies.push(sessionId);
+        }
+      } catch {
+        zombies.push(sessionId);
+      }
+    }
+
+    return zombies;
+  }
+
+  async repairSession(sessionId: string, cols: number, rows: number): Promise<void> {
+    this.validateUUID(sessionId);
+
+    if (await this.sessionExists(sessionId)) {
+      return;
+    }
+
+    await this.createSession(sessionId, cols, rows);
+  }
+
+  async healthCheck(): Promise<{ healthy: boolean; activeSessions: number; details?: string }> {
+    try {
+      const { stdout } = await execAsync(`tmux -S ${this.baseSocketDir}/* list-sessions 2>/dev/null || true`);
+      const sessionCount = stdout.trim().split('\n').filter(Boolean).length;
+      
+      return {
+        healthy: true,
+        activeSessions: sessionCount,
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        activeSessions: 0,
+        details: (error as Error).message,
+      };
+    }
+  }
+
+  async capturePane(sessionId: string, visibleOnly = true): Promise<string> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    if (!(await this.sessionExists(sessionId))) {
+      return '';
+    }
+
+    try {
+      const scrollbackFlag = visibleOnly ? '' : '-S -50000';
+      const { stdout } = await execAsync(
+        `tmux -S ${socketPath} capture-pane -t ${sessionName} -p -e ${scrollbackFlag} 2>/dev/null || true`,
+        { maxBuffer: 10 * 1024 * 1024 }
+      );
+      return stdout;
+    } catch {
+      return '';
+    }
+  }
+
+  async capturePaneChunked(
+    sessionId: string,
+    startLine: number,
+    lineCount: number
+  ): Promise<{ data: string; totalLines: number; hasMore: boolean }> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    if (!(await this.sessionExists(sessionId))) {
+      return { data: '', totalLines: 0, hasMore: false };
+    }
+
+    try {
+      const endLine = startLine + lineCount;
+      const { stdout } = await execAsync(
+        `tmux -S ${socketPath} capture-pane -t ${sessionName} -p -e -S -${startLine} -E -${Math.max(0, startLine - lineCount + 1)} 2>/dev/null || true`,
+        { maxBuffer: 10 * 1024 * 1024 }
+      );
+
+      const { stdout: historyInfo } = await execAsync(
+        `tmux -S ${socketPath} display -t ${sessionName} -p '#{history_size}' 2>/dev/null || echo 0`,
+      );
+      const totalLines = parseInt(historyInfo.trim(), 10) || 0;
+
+      return {
+        data: stdout,
+        totalLines,
+        hasMore: endLine < totalLines,
+      };
+    } catch {
+      return { data: '', totalLines: 0, hasMore: false };
+    }
+  }
+
+  async listSessions(): Promise<string[]> {
+    try {
+      const entries = fs.readdirSync(this.baseSocketDir);
+      const sessions: string[] = [];
+
+      for (const entry of entries) {
+        if (UUID_REGEX.test(entry)) {
+          if (await this.sessionExists(entry)) {
+            sessions.push(entry);
+          }
+        }
+      }
+
+      return sessions;
+    } catch {
+      return [];
+    }
+  }
+}
+
+export const tmuxManager = new TmuxManager();

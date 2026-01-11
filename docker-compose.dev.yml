@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  zeus-terminal-dev:
+    image: node:20-slim
+    container_name: zeus-terminal-dev
+    working_dir: /app
+    ports:
+      - "127.0.0.1:8096:8096"
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - zeus-tmux:/tmp/zeus-tmux
+      - ./data:/app/data
+      - ./backups:/app/backups
+    environment:
+      - NODE_ENV=development
+      - PORT=8096
+      - VITE_PORT=5173
+      - DATABASE_PATH=/app/data/zeus.db
+      - TMUX_SOCKET_DIR=/tmp/zeus-tmux
+      - LOKI_HOST=http://loki:3100
+      - PROMETHEUS_ENABLED=true
+      - LOKI_ENABLED=true
+    command: >
+      sh -c "
+        apt-get update && apt-get install -y tmux curl &&
+        npm install &&
+        npm run dev
+      "
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - hercules-network
+    labels:
+      - "com.hercules.service=zeus-terminal"
+      - "com.hercules.port=8096"
+      - "com.hercules.subdomain=zeus.herakles.dev"
+      - "com.hercules.hot-reload=true"
+
+volumes:
+  zeus-tmux:
+
+networks:
+  hercules-network:
+    external: true

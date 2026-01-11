@@ -1,0 +1,30 @@
+.lightning-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  pointer-events: none;
+  z-index: 50;
+  overflow: visible;
+}
+
+.lightning-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 200px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightning-overlay {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .lightning-overlay {
+    display: none;
+  }
+}

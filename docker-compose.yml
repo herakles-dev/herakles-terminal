@@ -1,0 +1,43 @@
+services:
+  zeus-terminal:
+    build: .
+    container_name: zeus-terminal
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    environment:
+      - NODE_ENV=production
+      - PORT=8096
+      - HOST=0.0.0.0
+      - DATABASE_PATH=/app/data/zeus.db
+      - TMUX_SOCKET=/app/tmux/zeus.sock
+      - LOG_LEVEL=info
+      - LOKI_HOST=http://loki:3100
+    volumes:
+      - zeus-data:/app/data
+      - zeus-tmux:/app/tmux
+    networks:
+      - hercules-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "com.hercules.service=zeus-terminal"
+      - "com.hercules.port=8096"
+      - "com.hercules.subdomain=zeus.herakles.dev"
+      - "prometheus.scrape=true"
+      - "prometheus.port=8096"
+      - "prometheus.path=/api/metrics"
+
+volumes:
+  zeus-data:
+    driver: local
+  zeus-tmux:
+    driver: local
+
+networks:
+  hercules-net:
+    external: true

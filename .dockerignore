@@ -1,0 +1,45 @@
+# Dependencies (reinstalled in container)
+node_modules/
+
+# Build outputs (rebuilt in container)
+dist/
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed at runtime)
+*.md
+docs/
+MASTER_PLAN*.md
+
+# Development files
+.env
+.env.local
+.env.*.local
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test files
+tests/
+coverage/
+playwright-report/
+test-results/
+*.test.ts
+*.spec.ts
+vitest.config.ts
+playwright.config.ts
+
+# Data (mounted as volume)
+data/
+*.db
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+*.pid
