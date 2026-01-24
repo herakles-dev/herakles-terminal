@@ -1,4 +1,8 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { enableConsoleLoopback } from './utils/consoleLoopback';
+
+// Enable console loopback for server-side debugging
+enableConsoleLoopback();
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -16,9 +20,12 @@ import type { TerminalCoreHandle } from './components/TerminalCore';
 import { MobileInputHandler } from './components/MobileInputHandler';
 import { LightningOverlay } from './components/LightningOverlay';
 import { ProjectNavigator } from './components/ProjectNavigator';
-import FullscreenViewer from './components/Canvas/FullscreenViewer';
 import { FileDropZone } from './components/FileDropZone';
 import { UploadProgress } from './components/UploadProgress';
+import { TodoPanel } from './components/TodoPanel';
+import { MusicPlayer } from './components/MusicPlayer';
+import type { SessionTodos } from '@shared/todoProtocol';
+import type { MusicPlayerState } from '@shared/musicProtocol';
 
 import { useWebSocket, ConnectionState } from './hooks/useWebSocket';
 import { useKeyboardHeight } from './hooks/useKeyboardHeight';
@@ -199,8 +206,119 @@ export default function App() {
     toggleStar,
     refetchMissedArtifacts,
   } = useCanvasArtifacts();
-  const [showLightning, setShowLightning] = useState(false);
-  
+  const [showLightning, setShowLightning] = useState(true);
+  const [todoPanelExpanded, setTodoPanelExpanded] = useState(true);
+  const [todoSessions, setTodoSessions] = useState<SessionTodos[]>([]);
+  const [todosLoading, setTodosLoading] = useState(false);
+  const [musicPlayerVisible, setMusicPlayerVisible] = useState(false);
+  const [musicPlayerState, setMusicPlayerState] = useState<Partial<MusicPlayerState>>({});
+  const csrfTokenRef = useRef<string | null>(null);
+
+  // Memoized callback to prevent infinite render loop - must NOT change reference
+  const handleMusicPlayerStateChange = useCallback((state: MusicPlayerState) => {
+    // Only sync playback state, NOT mode - parent controls mode entirely
+    setMusicPlayerState(prev => ({
+      ...prev,
+      videoId: state.videoId,
+      videoTitle: state.videoTitle,
+      thumbnailUrl: state.thumbnailUrl,
+      isPlaying: state.isPlaying,
+      volume: state.volume,
+      currentTime: state.currentTime,
+      duration: state.duration,
+      isMuted: state.isMuted,
+      position: state.position,
+      // mode is controlled by parent via musicPlayerVisible, don't sync back
+    }));
+  }, []); // Empty deps - setMusicPlayerState is stable
+
+  // Fetch CSRF token on mount
+  useEffect(() => {
+    fetch('/api/csrf-token', { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.data?.token) {
+          csrfTokenRef.current = data.data.token;
+          console.log('[MusicSync] CSRF token obtained');
+        }
+      })
+      .catch(err => console.error('[MusicSync] Failed to fetch CSRF token:', err));
+  }, []);
+
+  // Fetch persisted music player state on mount (resume functionality)
+  useEffect(() => {
+    console.log('[MusicResume] Fetching saved state...');
+    fetch('/api/music/state', { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => {
+        console.log('[MusicResume] Got response:', JSON.stringify(data));
+        if (data.data?.videoId) {
+          console.log('[MusicResume] Restoring video:', data.data.videoId, 'at time:', data.data.currentTime);
+          // Restore persisted state
+          setMusicPlayerState({
+            videoId: data.data.videoId,
+            videoTitle: data.data.videoTitle,
+            thumbnailUrl: data.data.thumbnailUrl,
+            volume: data.data.volume,
+            currentTime: data.data.currentTime,
+            isMuted: data.data.isMuted,
+            position: data.data.position,
+            isPlaying: false, // Don't auto-play, let user start
+          });
+          // Show player if video was previously loaded
+          if (data.data.mode !== 'hidden') {
+            console.log('[MusicResume] Setting player visible, mode was:', data.data.mode);
+            setMusicPlayerVisible(true);
+          }
+        } else {
+          console.log('[MusicResume] No videoId found in response');
+        }
+      })
+      .catch(err => console.error('[MusicResume] Failed to fetch:', err));
+  }, []);
+
+  // Debounced sync for music player state persistence
+  const musicSyncTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const handleMusicPlayerSync = useCallback((state: Partial<MusicPlayerState>) => {
+    // Immediate sync for important changes
+    const immediate = state.videoId !== undefined || state.mode !== undefined;
+    console.log('[MusicSync] Syncing state:', JSON.stringify(state), 'immediate:', immediate);
+
+    // Build headers with CSRF token
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (csrfTokenRef.current) {
+      headers['x-csrf-token'] = csrfTokenRef.current;
+    }
+
+    if (immediate) {
+      fetch('/api/music/state', {
+        method: 'PUT',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(state),
+      })
+        .then(res => res.json())
+        .then(data => console.log('[MusicSync] Save response:', JSON.stringify(data)))
+        .catch(err => console.error('[MusicSync] Failed to sync:', err));
+    } else {
+      // Debounce time-based updates (currentTime, volume)
+      clearTimeout(musicSyncTimeoutRef.current);
+      musicSyncTimeoutRef.current = setTimeout(() => {
+        // Re-build headers in timeout (token might have updated)
+        const timeoutHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (csrfTokenRef.current) {
+          timeoutHeaders['x-csrf-token'] = csrfTokenRef.current;
+        }
+        fetch('/api/music/state', {
+          method: 'PUT',
+          headers: timeoutHeaders,
+          credentials: 'include',
+          body: JSON.stringify(state),
+        }).catch(err => console.error('Failed to sync music state:', err));
+      }, 2000);
+    }
+  }, []);
+
   const terminalRefs = useRef<Map<string, TerminalCoreHandle>>(new Map());
   const terminalsRef = useRef<Map<string, { term: XTerm; fitAddon: FitAddon }>>(new Map());
   const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
@@ -208,6 +326,11 @@ export default function App() {
   const addArtifactRef = useRef(addArtifact);
   addArtifactRef.current = addArtifact;
   const outputPipelineRef = useRef<OutputPipelineManager | null>(null);
+  const pendingRestoreRef = useRef<Map<string, string>>(new Map());
+  const selectionRefs = useRef<Map<string, string>>(new Map()); // Track selection per window for WebGL
+  const restoreNeededAfterRecoveryRef = useRef<Set<string>>(new Set()); // Windows that need restore after WebGL recovery
+  const recoveryTerminalSizeRef = useRef<Map<string, { cols: number; rows: number }>>(new Map()); // FIX RS-2: Track terminal size during recovery
+  const contextMenuHandlersRef = useRef<Map<string, { element: HTMLElement; handler: (e: MouseEvent) => void }>>(new Map());
   const resizeCoordinatorRef = useRef(resizeCoordinator);
   resizeCoordinatorRef.current = resizeCoordinator;
 
@@ -233,6 +356,29 @@ export default function App() {
       observer.disconnect();
       resizeObserversRef.current.delete(windowId);
     }
+
+    // Clean up fit timeout to prevent memory leak
+    const fitTimeout = fitTimeoutRef.current.get(windowId);
+    if (fitTimeout) {
+      clearTimeout(fitTimeout);
+      fitTimeoutRef.current.delete(windowId);
+    }
+
+    // Clean up context menu listener to prevent event listener leak
+    const contextHandler = contextMenuHandlersRef.current.get(windowId);
+    if (contextHandler) {
+      contextHandler.element.removeEventListener('contextmenu', contextHandler.handler, true);
+      contextMenuHandlersRef.current.delete(windowId);
+    }
+
+    // Clean up pending restore content
+    pendingRestoreRef.current.delete(windowId);
+
+    // Clean up selection tracking
+    selectionRefs.current.delete(windowId);
+
+    // Clean up recovery tracking
+    restoreNeededAfterRecoveryRef.current.delete(windowId);
   };
 
   const handleMessage = useCallback((msg: any) => {
@@ -332,32 +478,55 @@ export default function App() {
       }
 
       case 'window:restore': {
+        // Step 1: Enter restore mode - clear and block pipeline
+        outputPipelineRef.current?.setRestoreInProgress(msg.windowId, true);
+
+        // Track that this window needs restore (for WebGL recovery coordination)
+        restoreNeededAfterRecoveryRef.current.add(msg.windowId);
+
         const handle = terminalRefs.current.get(msg.windowId);
-        if (handle?.terminal && msg.data) {
+        const terminal = handle?.terminal || terminalsRef.current.get(msg.windowId)?.term;
+
+        if (terminal && msg.data) {
+          // Step 2: Single RAF (reduced from 3 nested RAFs)
           requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              handle.terminal?.reset();
-              handle.terminal?.write(msg.data, () => {
-                requestAnimationFrame(() => {
-                  handle.terminal?.scrollToBottom();
-                });
-              });
+            terminal.reset();
+            terminal.write(msg.data, () => {
+              terminal.scrollToBottom();
+              // Step 3: Exit restore mode in write callback
+              outputPipelineRef.current?.setRestoreInProgress(msg.windowId, false);
+
+              // FIX WG-2: Don't clear restore flag here - WebGL context loss can happen AFTER write completes
+              // Flag will be cleared in handleRecoveryEnd after re-request is sent
+              // This prevents blank terminal when context loss occurs during/after restore
+              // restoreNeededAfterRecoveryRef.current.delete(msg.windowId);  // ❌ REMOVED
             });
           });
+        } else if (msg.data) {
+          // Terminal not ready yet - buffer restore content
+          pendingRestoreRef.current.set(msg.windowId, msg.data);
+          // Keep restore mode active until terminal flushes pending content
+
+          // Safety timeout - exit restore mode if terminal never initializes
+          // Prevents indefinite output blocking if terminal fails to mount
+          setTimeout(() => {
+            if (pendingRestoreRef.current.has(msg.windowId)) {
+              // FIX WG-3: Don't clear if recovery is in progress
+              // Recovery might complete and restore the content
+              if (!outputPipelineRef.current?.isRecoveryInProgress(msg.windowId)) {
+                console.warn(`[${msg.windowId}] Restore timeout - terminal never initialized, clearing pending restore`);
+                pendingRestoreRef.current.delete(msg.windowId);
+                outputPipelineRef.current?.setRestoreInProgress(msg.windowId, false);
+                // Note: restoreNeededAfterRecoveryRef not cleared here per WG-2 fix
+              } else {
+                console.info(`[${msg.windowId}] Restore timeout but recovery in progress - keeping buffer`);
+              }
+            }
+          }, 5000);
         } else {
-          const terminal = terminalsRef.current.get(msg.windowId);
-          if (terminal && msg.data) {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                terminal.term.reset();
-                terminal.term.write(msg.data, () => {
-                  requestAnimationFrame(() => {
-                    terminal.term.scrollToBottom();
-                  });
-                });
-              });
-            });
-          }
+          // No data to restore - exit restore mode immediately
+          outputPipelineRef.current?.setRestoreInProgress(msg.windowId, false);
+          restoreNeededAfterRecoveryRef.current.delete(msg.windowId);
         }
         break;
       }
@@ -395,6 +564,11 @@ export default function App() {
         toast.success(`File ready: ${msg.file.filename}`);
         break;
 
+      case 'todo:allSessions':
+        setTodoSessions(msg.sessions || []);
+        setTodosLoading(false);
+        break;
+
       case 'error':
         console.error('WebSocket error:', msg.message);
         break;
@@ -403,14 +577,35 @@ export default function App() {
 
   const wasConnectedRef = useRef(false);
   const handleStateChange = useCallback((newState: ConnectionState) => {
+    if (newState === 'reconnecting' || newState === 'disconnected') {
+      // Clear pipeline and pending restores on disconnect/reconnect
+      // This prevents stale data from corrupting the terminal after reconnection
+      outputPipelineRef.current?.clearAll();
+      pendingRestoreRef.current.clear();
+    }
+
     if (newState === 'connected') {
       setIsLoading(true);
       if (wasConnectedRef.current) {
         refetchMissedArtifacts();
+
+        // Re-subscribe all existing windows to trigger restore after reconnection
+        // This ensures terminal content is restored after network hiccups
+        windows.forEach(win => {
+          const handle = terminalRefs.current.get(win.id);
+          if (handle?.terminal) {
+            sendMessageRef.current?.({
+              type: 'window:subscribe',
+              windowId: win.id,
+              cols: handle.terminal.cols,
+              rows: handle.terminal.rows,
+            });
+          }
+        });
       }
       wasConnectedRef.current = true;
     }
-  }, [refetchMissedArtifacts]);
+  }, [refetchMissedArtifacts, windows]);
 
   const wsUrl = useMemo(() => {
     if (showWelcome) return '';
@@ -427,6 +622,20 @@ export default function App() {
   useEffect(() => {
     sendMessageRef.current = wsSend;
   }, [wsSend]);
+
+  // Track if we're subscribed to todo updates
+  const todoSubscribedRef = useRef(false);
+
+  // Subscribe to todo updates once when connected
+  useEffect(() => {
+    if (!sendMessageRef.current || connectionState !== 'connected') return;
+
+    if (!todoSubscribedRef.current) {
+      setTodosLoading(true);
+      sendMessageRef.current({ type: 'todo:subscribe', windowId: 'global' });
+      todoSubscribedRef.current = true;
+    }
+  }, [connectionState]);
 
   useEffect(() => {
     const writeToTerminal = (windowId: string, data: string) => {
@@ -488,7 +697,7 @@ export default function App() {
         try { terminal.fitAddon.fit(); } catch {}
       }
       fitTimeoutRef.current.delete(id);
-    }, 150);
+    }, 250);  // FIX RS-4: 200ms CSS transition + 50ms buffer (was 150ms)
     fitTimeoutRef.current.set(id, timeout);
   }, [sendMessage]);
 
@@ -505,6 +714,65 @@ export default function App() {
 
     const handleTerminalResize = (cols: number, rows: number) => {
       sendMessage({ type: 'window:resize', windowId, cols, rows });
+    };
+
+    // WebGL recovery coordination - notify output pipeline to pause
+    const handleRecoveryStart = (terminalId: string) => {
+      outputPipelineRef.current?.setRecoveryInProgress(terminalId, true);
+
+      // FIX RS-2: Capture terminal size at start of recovery
+      // This allows us to detect if the window was resized during recovery
+      const handle = terminalRefs.current.get(terminalId);
+      if (handle?.terminal) {
+        recoveryTerminalSizeRef.current.set(terminalId, {
+          cols: handle.terminal.cols,
+          rows: handle.terminal.rows,
+        });
+      }
+    };
+
+    // WebGL recovery coordination - resume output pipeline and re-request restore if needed
+    const handleRecoveryEnd = (terminalId: string, success: boolean) => {
+      outputPipelineRef.current?.setRecoveryInProgress(terminalId, false);
+
+      if (success) {
+        // FIX RS-2: Check if terminal size changed during recovery
+        const sizeAtStart = recoveryTerminalSizeRef.current.get(terminalId);
+        const handle = terminalRefs.current.get(terminalId);
+        const currentSize = handle?.terminal
+          ? { cols: handle.terminal.cols, rows: handle.terminal.rows }
+          : null;
+
+        const sizeChanged =
+          sizeAtStart &&
+          currentSize &&
+          (sizeAtStart.cols !== currentSize.cols || sizeAtStart.rows !== currentSize.rows);
+
+        if (sizeChanged) {
+          console.warn(
+            `[${terminalId}] Terminal size changed during recovery: ${sizeAtStart.cols}x${sizeAtStart.rows} → ${currentSize.cols}x${currentSize.rows}`
+          );
+          // Size changed - re-subscribe with NEW size to get content formatted correctly
+          sendMessage({
+            type: 'window:subscribe',
+            windowId: terminalId,
+            cols: currentSize.cols,
+            rows: currentSize.rows,
+          });
+          restoreNeededAfterRecoveryRef.current.delete(terminalId);
+        } else if (restoreNeededAfterRecoveryRef.current.has(terminalId)) {
+          // Size unchanged - safe to restore with original dimensions
+          console.info(`[${terminalId}] Re-requesting restore after successful WebGL recovery`);
+          sendMessage({ type: 'window:subscribe', windowId: terminalId });
+          restoreNeededAfterRecoveryRef.current.delete(terminalId);
+        }
+
+        // Clean up size tracking
+        recoveryTerminalSizeRef.current.delete(terminalId);
+      } else {
+        // Recovery failed - clean up size tracking
+        recoveryTerminalSizeRef.current.delete(terminalId);
+      }
     };
 
     const handleTerminalReady = (term: XTerm, _fitAddon: FitAddon) => {
@@ -554,36 +822,105 @@ export default function App() {
     const handleTerminalRef = (handle: TerminalCoreHandle | null) => {
       if (handle) {
         terminalRefs.current.set(windowId, handle);
+
+        // Check for render error and notify user
+        if (handle.renderError) {
+          console.error(`[${windowId}] Terminal render failed:`, handle.renderError);
+          toast.error(`Terminal failed: WebGL unavailable`);
+          return; // Don't set up event handlers on broken terminal
+        }
+
+        // Track selection changes for WebGL (selection clears on right-click mouseup)
+        if (handle.terminal) {
+          handle.terminal.onSelectionChange(() => {
+            const selection = handle.terminal?.getSelection() || '';
+            if (selection.length > 0) {
+              selectionRefs.current.set(windowId, selection);
+
+              // Clear stale selections after 30 seconds to prevent memory accumulation
+              // Selection strings can be 10KB+ and accumulate over extended sessions
+              setTimeout(() => {
+                if (selectionRefs.current.get(windowId) === selection) {
+                  selectionRefs.current.delete(windowId);
+                }
+              }, 30000);
+            }
+            // Don't clear on empty - keep last known selection for context menu
+          });
+
+          // Attach contextmenu listener in CAPTURE phase to intercept before xterm
+          // xterm.js intentionally allows native context menu - we must capture first
+          if (handle.terminal.element) {
+            const termElement = handle.terminal.element;
+
+            const contextMenuHandler = (e: MouseEvent) => {
+              e.preventDefault();
+              e.stopPropagation();
+
+              // Use tracked selection (WebGL clears on mouseup)
+              const trackedSelection = selectionRefs.current.get(windowId) || '';
+              const currentSelection = handle.terminal?.getSelection() || '';
+              const selection = currentSelection.length > 0 ? currentSelection : trackedSelection;
+
+              if (selection.length > 0) {
+                setContextMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  windowId,
+                  selectedText: selection,
+                });
+                // Clear tracked selection after showing menu
+                selectionRefs.current.delete(windowId);
+              }
+            };
+
+            // CAPTURE phase (third param = true) runs BEFORE xterm's bubbling handler
+            termElement.addEventListener('contextmenu', contextMenuHandler, true);
+
+            // Store for cleanup
+            contextMenuHandlersRef.current.set(windowId, { element: termElement, handler: contextMenuHandler });
+          }
+        }
+
+        // Flush pending restore content if terminal wasn't ready earlier
+        const pendingRestore = pendingRestoreRef.current.get(windowId);
+        if (pendingRestore && handle.terminal) {
+          pendingRestoreRef.current.delete(windowId);
+          requestAnimationFrame(() => {
+            handle.terminal?.reset();
+            handle.terminal?.write(pendingRestore, () => {
+              handle.terminal?.scrollToBottom();
+              // Exit restore mode now that pending content is flushed
+              outputPipelineRef.current?.setRestoreInProgress(windowId, false);
+            });
+          });
+        }
       } else {
         terminalRefs.current.delete(windowId);
-      }
-    };
+        selectionRefs.current.delete(windowId);
 
-    const handleContextMenu = (e: React.MouseEvent) => {
-      const handle = terminalRefs.current.get(windowId);
-      const selection = handle?.terminal?.getSelection();
-      if (selection && selection.length > 0) {
-        e.preventDefault();
-        setContextMenu({
-          x: e.clientX,
-          y: e.clientY,
-          windowId,
-          selectedText: selection,
-        });
+        // Clean up capture-phase contextmenu listener
+        const stored = contextMenuHandlersRef.current.get(windowId);
+        if (stored) {
+          stored.element.removeEventListener('contextmenu', stored.handler, true);
+          contextMenuHandlersRef.current.delete(windowId);
+        }
       }
     };
 
     return (
-      <div 
-        className={`terminal-container ${isFocused ? '' : 'opacity-90'}`} 
+      <div
+        className={`terminal-container ${isFocused ? '' : 'opacity-90'}`}
         style={{ position: 'relative', width: '100%', height: '100%' }}
-        onContextMenu={handleContextMenu}
       >
         <TerminalCore
           ref={handleTerminalRef}
           onData={handleTerminalData}
           onResize={handleTerminalResize}
           onReady={handleTerminalReady}
+          onRecoveryStart={handleRecoveryStart}
+          onRecoveryEnd={handleRecoveryEnd}
+          isRecovering={() => outputPipelineRef.current?.isRecoveryInProgress(windowId) ?? false}
           fontSize={fontSize}
           terminalId={windowId}
         />
@@ -749,7 +1086,16 @@ export default function App() {
             }
             break;
           case 'm':
-            if (activeWindowId) {
+            if (e.shiftKey) {
+              // Ctrl+Shift+M - toggle music player
+              e.preventDefault();
+              setMusicPlayerVisible(prev => !prev);
+              setMusicPlayerState(prev => ({
+                ...prev,
+                mode: prev.mode === 'hidden' ? 'audio' : 'hidden',
+              }));
+            } else if (activeWindowId) {
+              // Ctrl+M - minimize window
               e.preventDefault();
               setWindows(prev => prev.map(w => w.id === activeWindowId ? { ...w, isMinimized: true } : w));
             }
@@ -861,21 +1207,6 @@ export default function App() {
       <div className="flex items-center gap-1.5 sm:gap-2">
         <span className="text-[12px] sm:text-sm text-[#a1a1aa] font-medium tabular-nums px-2.5 py-1.5 rounded-md bg-white/[0.03] border border-white/[0.04]">{windows.length}/6</span>
         <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent" />
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowLightning(!showLightning); }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onTouchStart={(e) => e.stopPropagation()}
-          className={`p-2 rounded-lg transition-all duration-200 border ${
-            showLightning 
-              ? 'bg-gradient-to-br from-[#00d4ff]/20 to-[#8b5cf6]/10 text-[#00d4ff] shadow-[0_0_16px_rgba(0,212,255,0.15)] border-[#00d4ff]/25' 
-              : 'text-[#71717a] hover:text-white hover:bg-white/[0.06] border-transparent hover:border-white/[0.06]'
-          }`}
-          title="Toggle lightning effect"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-        </button>
         <ProjectNavigator onSelectProject={handleProjectSelect} />
         <button
           onClick={(e) => { e.stopPropagation(); setQuickKeysVisible(!quickKeysVisible); }}
@@ -962,6 +1293,12 @@ export default function App() {
       )}
       
       <div className="flex-1 min-h-0 relative">
+        <TodoPanel
+          expanded={todoPanelExpanded}
+          onToggle={() => setTodoPanelExpanded(prev => !prev)}
+          sessions={todoSessions}
+          isLoading={todosLoading}
+        />
         <SplitView
           windows={windows}
           activeWindowId={activeWindowId}
@@ -975,6 +1312,7 @@ export default function App() {
           renderTerminal={renderTerminal}
           sidePanelOpen={sidePanelOpen}
           minimapVisible={minimapVisible}
+          leftOffset={todoPanelExpanded ? 280 : 48}
         />
         <SidePanel
           isOpen={sidePanelOpen}
@@ -996,6 +1334,8 @@ export default function App() {
           onCanvasRemoveArtifact={removeArtifact}
           onCanvasToggleStar={toggleStar}
           onCanvasSendToTerminal={handleSendArtifactToTerminal}
+          showLightning={showLightning}
+          onLightningChange={setShowLightning}
         />
         <TerminalMinimap
           terminal={getActiveTerminal()}
@@ -1024,18 +1364,43 @@ export default function App() {
           onClose={() => setContextMenu(null)}
         />
       )}
-      {activeArtifactId && (() => {
-        const activeArtifact = canvasArtifacts.find(a => a.id === activeArtifactId);
-        return activeArtifact ? (
-          <FullscreenViewer
-            artifact={activeArtifact}
-            viewMode={viewMode}
-            onClose={() => setActiveArtifact('')}
-            onToggleViewMode={toggleViewMode}
-          />
-        ) : null;
-      })()}
       <UploadProgress />
+      {/* Music Player Toggle Button - position adjusts based on TodoPanel */}
+      <button
+        onClick={() => {
+          console.log('[App] Toggle button clicked - current musicPlayerVisible:', musicPlayerVisible);
+          const newVisible = !musicPlayerVisible;
+          console.log('[App] Setting musicPlayerVisible to:', newVisible);
+          setMusicPlayerVisible(newVisible);
+          setMusicPlayerState(prev => {
+            const newMode = newVisible ? 'audio' : 'hidden';
+            console.log('[App] Setting musicPlayerState.mode to:', newMode, 'prev:', prev);
+            return {
+              ...prev,
+              mode: newMode,
+            };
+          });
+        }}
+        className={`fixed bottom-20 z-[9998] w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 ${
+          musicPlayerVisible
+            ? 'bg-[#00d4ff]/20 text-[#00d4ff] border border-[#00d4ff]/30 shadow-[0_0_12px_rgba(0,212,255,0.3)]'
+            : 'bg-[#111118]/90 text-[#71717a] border border-white/10 hover:text-white hover:border-white/20'
+        }`}
+        style={{ left: todoPanelExpanded ? 296 : 64 }}
+        title="Toggle Music Player (Ctrl+Shift+M)"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+          <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+        </svg>
+      </button>
+      <MusicPlayer
+        initialState={{
+          ...musicPlayerState,
+          mode: musicPlayerVisible ? (musicPlayerState.mode === 'hidden' ? 'audio' : musicPlayerState.mode) : 'hidden',
+        }}
+        onStateChange={handleMusicPlayerStateChange}
+        onSync={handleMusicPlayerSync}
+      />
     </div>
     </FileDropZone>
     </ResizeCoordinatorContext.Provider>

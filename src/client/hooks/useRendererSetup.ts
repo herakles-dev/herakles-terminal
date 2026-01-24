@@ -1,63 +1,54 @@
 import { useCallback, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { CanvasAddon } from '@xterm/addon-canvas';
 
-export type RendererType = 'webgl' | 'canvas' | 'dom';
+export type RendererType = 'webgl';
 
 export type RendererState =
   | { status: 'idle' }
-  | { status: 'loading'; type: 'webgl' | 'canvas' }
+  | { status: 'loading' }
   | { status: 'active'; type: RendererType }
   | { status: 'recovering'; attempts: number }
   | { status: 'failed'; lastError?: string };
 
+/**
+ * Result returned by setupRenderer after async initialization completes.
+ * Used by TerminalCore to ensure WebGL is ready before calling fit/onReady.
+ */
+export interface SetupResult {
+  success: boolean;
+  rendererType: RendererType | null;
+  error?: string;
+}
+
 export interface UseRendererSetupOptions {
   terminalId?: string;
   enableWebGL?: boolean;
-  enableCanvas?: boolean;
   onStateChange?: (state: RendererState) => void;
+  /**
+   * Called when WebGL recovery starts, before term.clear()
+   * Use this to pause the output pipeline and clear buffers
+   */
+  onRecoveryStart?: (terminalId: string) => void;
+  /**
+   * Called when WebGL recovery ends
+   * @param success - true if recovery succeeded, false if it failed
+   */
+  onRecoveryEnd?: (terminalId: string, success: boolean) => void;
 }
 
 export interface UseRendererSetupReturn {
-  setupRenderer: (term: XTerm) => void;
+  setupRenderer: (term: XTerm) => Promise<SetupResult>;
   activeRenderer: RendererType | null;
   rendererState: RendererState;
   dispose: () => void;
 }
 
-const CANVAS_DETECTION_TIMEOUT_MS = 500;
 const MAX_RECOVERY_ATTEMPTS = 3;
-
-function waitForCanvas(element: HTMLElement, timeoutMs = CANVAS_DETECTION_TIMEOUT_MS): Promise<boolean> {
-  return new Promise((resolve) => {
-    const canvas = element.querySelector('canvas.xterm-text-layer');
-    if (canvas) {
-      resolve(true);
-      return;
-    }
-
-    let resolved = false;
-    const observer = new MutationObserver(() => {
-      const foundCanvas = element.querySelector('canvas.xterm-text-layer');
-      if (foundCanvas && !resolved) {
-        resolved = true;
-        observer.disconnect();
-        resolve(true);
-      }
-    });
-
-    observer.observe(element, { childList: true, subtree: true });
-
-    setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        observer.disconnect();
-        resolve(false);
-      }
-    }, timeoutMs);
-  });
-}
+// Reduced scrollback after context loss to free GPU memory
+const RECOVERY_SCROLLBACK_LIMIT = 5000;
+// Timeout for WebGL initialization to prevent hanging
+const WEBGL_INIT_TIMEOUT_MS = 3000;
 
 export function useRendererSetup(
   options: UseRendererSetupOptions = {}
@@ -65,15 +56,16 @@ export function useRendererSetup(
   const {
     terminalId = 'Terminal',
     enableWebGL = true,
-    enableCanvas = true,
     onStateChange,
+    onRecoveryStart,
+    onRecoveryEnd,
   } = options;
 
   const rendererStateRef = useRef<RendererState>({ status: 'idle' });
   const mountedRef = useRef(true);
   const webglAddonRef = useRef<WebglAddon | null>(null);
-  const canvasAddonRef = useRef<CanvasAddon | null>(null);
   const recoveryAttemptsRef = useRef(0);
+  const originalScrollbackRef = useRef<number | null>(null);
 
   const setState = useCallback((state: RendererState) => {
     rendererStateRef.current = state;
@@ -88,106 +80,169 @@ export function useRendererSetup(
     return null;
   }, []);
 
-  const tryCanvasFallback = useCallback(async (term: XTerm) => {
-    if (!enableCanvas) {
-      console.warn(`[${terminalId}] Canvas disabled - using DOM fallback`);
-      setState({ status: 'active', type: 'dom' });
-      return;
-    }
-
-    setState({ status: 'loading', type: 'canvas' });
-
-    try {
-      const canvasAddon = new CanvasAddon();
-      canvasAddonRef.current = canvasAddon;
-      term.loadAddon(canvasAddon);
-
-      if (!mountedRef.current || !term.element) {
-        setState({ status: 'failed', lastError: 'Component unmounted' });
-        return;
-      }
-
-      const canvasFound = await waitForCanvas(term.element);
-
-      if (canvasFound) {
-        setState({ status: 'active', type: 'canvas' });
-        console.info(`[${terminalId}] Canvas renderer ACTIVE`);
-      } else {
-        setState({ status: 'active', type: 'dom' });
-        console.warn(`[${terminalId}] Canvas FAILED - DOM fallback`);
-      }
-    } catch (e) {
-      setState({ status: 'active', type: 'dom' });
-      console.warn(`[${terminalId}] Canvas failed - DOM fallback:`, e);
-    }
-  }, [terminalId, enableCanvas, setState]);
-
-  const setupRenderer = useCallback(async (term: XTerm) => {
+  const setupRenderer = useCallback(async (term: XTerm, isRecovery = false): Promise<SetupResult> => {
     if (!term.element) {
-      console.error(`[${terminalId}] Cannot setup renderer: term.element is null`);
-      setState({ status: 'failed', lastError: 'term.element is null' });
-      return;
+      const error = 'term.element is null';
+      console.error(`[${terminalId}] Cannot setup renderer: ${error}`);
+      setState({ status: 'failed', lastError: error });
+      return { success: false, rendererType: null, error };
     }
 
     mountedRef.current = true;
-    recoveryAttemptsRef.current = 0;
 
-    if (!enableWebGL) {
-      console.info(`[${terminalId}] WebGL disabled, using Canvas`);
-      await tryCanvasFallback(term);
-      return;
+    // Only reset recovery counter on initial setup, not during recovery
+    if (!isRecovery) {
+      recoveryAttemptsRef.current = 0;
     }
 
-    setState({ status: 'loading', type: 'webgl' });
+    if (!enableWebGL) {
+      const error = 'WebGL disabled';
+      console.error(`[${terminalId}] WebGL disabled - no renderer available`);
+      setState({ status: 'failed', lastError: error });
+      return { success: false, rendererType: null, error };
+    }
+
+    setState({ status: 'loading' });
 
     try {
       const webglAddon = new WebglAddon();
       webglAddonRef.current = webglAddon;
 
       webglAddon.onContextLoss(() => {
-        console.warn(`[${terminalId}] WebGL context lost`);
+        console.error(`[${terminalId}] WebGL context lost`);
 
         if (recoveryAttemptsRef.current < MAX_RECOVERY_ATTEMPTS) {
           recoveryAttemptsRef.current++;
           setState({ status: 'recovering', attempts: recoveryAttemptsRef.current });
 
+          // CRITICAL: Pause pipeline IMMEDIATELY - before any delay
+          // This prevents output from being written to the broken renderer
+          // which produces the dots/garbled output pattern
+          onRecoveryStart?.(terminalId);
+
           setTimeout(() => {
-            if (mountedRef.current) {
+            if (mountedRef.current && term.element) {
               webglAddon.dispose();
               webglAddonRef.current = null;
-              tryCanvasFallback(term);
+
+              // Clear buffer and reduce scrollback to free GPU memory before recovery
+              // This is critical - without clearing, the same OOM condition will recur
+              if (originalScrollbackRef.current === null) {
+                originalScrollbackRef.current = term.options.scrollback ?? 20000;
+              }
+
+              console.warn(`[${terminalId}] Clearing buffer and reducing scrollback (${originalScrollbackRef.current} → ${RECOVERY_SCROLLBACK_LIMIT}) for WebGL recovery`);
+
+              // Clear the terminal buffer to free GPU texture memory
+              term.clear();
+
+              // Reduce scrollback limit to prevent future OOM
+              term.options.scrollback = RECOVERY_SCROLLBACK_LIMIT;
+
+              // Attempt to reinitialize WebGL with reduced memory footprint
+              setupRenderer(term, true);
+            } else {
+              // Component unmounted during delay - notify recovery failed
+              onRecoveryEnd?.(terminalId, false);
             }
           }, 100 * recoveryAttemptsRef.current);
         } else {
+          console.error(`[${terminalId}] WebGL context lost - max recovery attempts reached`);
           webglAddon.dispose();
           webglAddonRef.current = null;
-          tryCanvasFallback(term);
+          setState({ status: 'failed', lastError: 'WebGL context lost after max recovery attempts' });
+          // Notify that recovery failed
+          onRecoveryEnd?.(terminalId, false);
         }
       });
 
+      // loadAddon throws synchronously if WebGL2 is not supported
       term.loadAddon(webglAddon);
 
       if (!mountedRef.current || !term.element) {
-        setState({ status: 'failed', lastError: 'Component unmounted' });
-        return;
+        const error = 'Component unmounted or no element';
+        setState({ status: 'failed', lastError: error });
+        return { success: false, rendererType: null, error };
       }
 
-      const canvasFound = await waitForCanvas(term.element);
+      // Wait a frame for WebGL to initialize its canvas, with timeout protection
+      const waitForFrame = () => new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      );
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('WebGL init timeout')), WEBGL_INIT_TIMEOUT_MS)
+      );
 
-      if (canvasFound) {
-        setState({ status: 'active', type: 'webgl' });
-        console.info(`[${terminalId}] WebGL renderer ACTIVE`);
-      } else {
-        console.warn(`[${terminalId}] WebGL failed, trying Canvas`);
+      try {
+        await Promise.race([waitForFrame(), timeoutPromise]);
+      } catch (e) {
+        const error = 'WebGL init timeout';
+        console.error(`[${terminalId}] ${error}`);
         webglAddon.dispose();
         webglAddonRef.current = null;
-        await tryCanvasFallback(term);
+        setState({ status: 'failed', lastError: error });
+        return { success: false, rendererType: null, error };
       }
+
+      // Verify WebGL is actually working by finding a canvas with WebGL2 context
+      // XTerm's default canvases use 2D context, WebGL addon uses WebGL2
+      // This prevents false positives where we detect XTerm's 2D canvases instead
+      const canvases = term.element.querySelectorAll('canvas');
+      let webglCanvas: HTMLCanvasElement | null = null;
+
+      for (const canvas of canvases) {
+        try {
+          // getContext returns existing context if already created
+          // XTerm default canvases have 2D context → returns null for webgl2
+          // WebGL addon canvas has WebGL2 context → returns the context
+          const gl = (canvas as HTMLCanvasElement).getContext('webgl2');
+          if (gl) {
+            webglCanvas = canvas as HTMLCanvasElement;
+            break;
+          }
+        } catch {
+          // getContext can throw if context type doesn't match existing
+        }
+      }
+
+      if (!webglCanvas) {
+        const error = 'WebGL2 context not found - addon may have failed silently';
+        console.error(`[${terminalId}] WebGL addon loaded but no WebGL2 context found`);
+        webglAddon.dispose();
+        webglAddonRef.current = null;
+        setState({ status: 'failed', lastError: error });
+        return { success: false, rendererType: null, error };
+      }
+
+      setState({ status: 'active', type: 'webgl' });
+
+      // Reset recovery counter after successful recovery
+      // This allows unlimited successful recoveries across the session lifetime
+      if (isRecovery) {
+        recoveryAttemptsRef.current = 0;
+        console.info(`[${terminalId}] WebGL recovery successful - counter reset`);
+        // Notify that recovery succeeded - pipeline can resume
+        onRecoveryEnd?.(terminalId, true);
+      } else {
+        console.info(`[${terminalId}] WebGL renderer ACTIVE`);
+      }
+
+      return { success: true, rendererType: 'webgl' as RendererType };
     } catch (e) {
-      console.warn(`[${terminalId}] WebGL initialization failed:`, e);
-      await tryCanvasFallback(term);
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      const error = `WebGL init failed: ${errorMsg}`;
+      console.error(`[${terminalId}] WebGL initialization failed:`, e);
+      setState({ status: 'failed', lastError: error });
+
+      // FIX WG-1: Notify recovery failed so pipeline can resume
+      // Without this, the output pipeline stays paused forever if WebGL throws during recovery
+      if (isRecovery) {
+        onRecoveryEnd?.(terminalId, false);
+      }
+
+      return { success: false, rendererType: null, error };
     }
-  }, [terminalId, enableWebGL, tryCanvasFallback, setState]);
+  }, [terminalId, enableWebGL, setState, onRecoveryStart, onRecoveryEnd]);
 
   const dispose = useCallback(() => {
     mountedRef.current = false;
@@ -198,14 +253,6 @@ export function useRendererSetup(
         // Ignore disposal errors
       }
       webglAddonRef.current = null;
-    }
-    if (canvasAddonRef.current) {
-      try {
-        canvasAddonRef.current.dispose();
-      } catch {
-        // Ignore disposal errors
-      }
-      canvasAddonRef.current = null;
     }
     setState({ status: 'idle' });
   }, [setState]);

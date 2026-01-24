@@ -36,16 +36,10 @@ export interface TerminalCoreProps {
   terminalId?: string;
 
   /**
-   * Optional: Enable WebGL renderer (first priority in fallback chain)
+   * Optional: Enable WebGL renderer (required for rendering)
    * @default true
    */
   enableWebGL?: boolean;
-
-  /**
-   * Optional: Enable Canvas renderer (fallback from WebGL)
-   * @default true
-   */
-  enableCanvas?: boolean;
 
   /**
    * Optional: Callback when terminal dimensions change
@@ -58,6 +52,30 @@ export interface TerminalCoreProps {
    * Called once after XTerm instance is created, rendered, and fitted
    */
   onReady?: (term: XTerm, fitAddon: FitAddon) => void;
+
+  /**
+   * Optional: Context menu handler
+   * Called when user right-clicks on terminal
+   */
+  onContextMenu?: (e: React.MouseEvent) => void;
+
+  /**
+   * Optional: Called when WebGL recovery starts, before term.clear()
+   * Use this to pause the output pipeline and clear buffers
+   */
+  onRecoveryStart?: (terminalId: string) => void;
+
+  /**
+   * Optional: Called when WebGL recovery ends
+   * @param success - true if recovery succeeded, false if it failed
+   */
+  onRecoveryEnd?: (terminalId: string, success: boolean) => void;
+
+  /**
+   * FIX RS-2: Check if terminal is recovering from WebGL context loss
+   * Used to block resize operations during recovery
+   */
+  isRecovering?: () => boolean;
 }
 
 /**
@@ -69,6 +87,8 @@ export interface TerminalCoreHandle {
   terminal: XTerm | null;
   /** FitAddon instance (null until initialized) */
   fitAddon: FitAddon | null;
+  /** Render error if WebGL failed (null if rendering OK) */
+  renderError: string | null;
   /** Write data to terminal */
   write: (data: string) => void;
   /** Fit terminal to container size */
@@ -139,9 +159,12 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
       fontSize,
       terminalId = 'TerminalCore',
       enableWebGL = true,
-      enableCanvas = true,
       onResize,
       onReady,
+      onContextMenu,
+      onRecoveryStart,
+      onRecoveryEnd,
+      isRecovering,
     } = props;
 
     // Hook 1: Core terminal lifecycle
@@ -153,11 +176,12 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
       fontSize,
     });
 
-    // Hook 3: Renderer setup with fallback chain
+    // Hook 3: WebGL renderer setup (no fallback - WebGL required)
     const { setupRenderer, dispose: disposeRenderer } = useRendererSetup({
       terminalId,
       enableWebGL,
-      enableCanvas,
+      onRecoveryStart,
+      onRecoveryEnd,
     });
 
     // Hook 4: Resize coordination (existing from Sprint 1)
@@ -166,51 +190,88 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
     // Store fitAddon separately for imperative handle
     const fitAddonRef = useRef<FitAddon | null>(null);
 
+    // Track render error state for WebGL failures
+    const renderErrorRef = useRef<string | null>(null);
+
+    // Track cleanup function for async initialization
+    const cleanupRef = useRef<(() => void) | null>(null);
+
     // Initialize terminal on mount
     useEffect(() => {
       // Wait for container to be available
       if (!containerRef.current) return;
 
-      try {
-        // Step 1: Initialize terminal with configuration and base addons
-        const { term, fitAddon } = initializeTerminal(containerRef.current);
-        terminalRef.current = term;
-        fitAddonRef.current = fitAddon;
+      // Track if effect was cleaned up during async init
+      let cancelled = false;
 
-        // Step 2: Setup renderer (WebGL → Canvas → DOM fallback)
-        setupRenderer(term);
+      (async () => {
+        try {
+          // Step 1: Initialize terminal with configuration and base addons
+          const { term, fitAddon } = initializeTerminal(containerRef.current!);
+          if (cancelled) return;
 
-        // Step 3: Setup user input handler
-        const dataDisposable = term.onData((data) => {
-          onData(data);
-        });
+          terminalRef.current = term;
+          fitAddonRef.current = fitAddon;
 
-        // Step 4: Fit terminal to container
-        fitAddon.fit();
+          // Step 2: CRITICAL - Wait for WebGL to be ready before continuing
+          // This prevents race condition where fit/onReady happen before WebGL canvas exists
+          const rendererResult = await setupRenderer(term);
+          if (cancelled) return;
 
-        // Step 5: Register with resize coordinator
-        const unregister = resizeCoordinator.register({
-          id: terminalId,
-          fitAddon,
-          onResize,
-        });
+          if (!rendererResult.success) {
+            const errorMsg = rendererResult.error || 'WebGL initialization failed';
+            console.error(`[${terminalId}] WebGL setup failed:`, errorMsg);
+            renderErrorRef.current = errorMsg;
+            // Don't call onReady - terminal cannot function without WebGL
+            // Store cleanup for partial initialization
+            cleanupRef.current = () => {
+              disposeRenderer();
+            };
+            return;
+          }
 
-        // Step 6: Call onReady callback if provided
-        if (onReady) {
-          onReady(term, fitAddon);
+          // Step 3: Setup user input handler
+          const dataDisposable = term.onData((data) => {
+            onData(data);
+          });
+
+          // Step 4: NOW safe to fit - WebGL is ready
+          fitAddon.fit();
+
+          // Step 5: Register with resize coordinator (skip auto-resize, we just did fit)
+          const unregister = resizeCoordinator.register(
+            {
+              id: terminalId,
+              fitAddon,
+              onResize,
+              isRecovering,  // FIX RS-2: Pass recovery check to block resize during recovery
+            },
+            { skipInitialResize: true }
+          );
+
+          // Step 6: NOW safe to call onReady - WebGL is fully initialized
+          if (onReady) {
+            onReady(term, fitAddon);
+          }
+
+          console.info(`[${terminalId}] TerminalCore initialized successfully`);
+
+          // Store cleanup for when effect unmounts
+          cleanupRef.current = () => {
+            dataDisposable.dispose();
+            disposeRenderer();
+            unregister();
+          };
+        } catch (error) {
+          console.error(`[${terminalId}] Failed to initialize TerminalCore:`, error);
         }
+      })();
 
-        console.info(`[${terminalId}] TerminalCore initialized successfully`);
-
-        // Cleanup on unmount
-        return () => {
-          dataDisposable.dispose();
-          disposeRenderer();
-          unregister();
-        };
-      } catch (error) {
-        console.error(`[${terminalId}] Failed to initialize TerminalCore:`, error);
-      }
+      // Cleanup on unmount
+      return () => {
+        cancelled = true;
+        cleanupRef.current?.();
+      };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []); // Run once on mount
 
@@ -232,6 +293,7 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
       () => ({
         terminal: terminalRef.current,
         fitAddon: fitAddonRef.current,
+        renderError: renderErrorRef.current,
         write: (data: string) => {
           terminalRef.current?.write(data);
         },
@@ -261,6 +323,7 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
     return (
       <div
         ref={containerRef}
+        onContextMenu={onContextMenu}
         style={{
           position: 'relative',
           width: '100%',

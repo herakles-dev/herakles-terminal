@@ -6,6 +6,22 @@ export interface ResizeTarget {
   id: string;
   fitAddon: FitAddon;
   onResize?: (cols: number, rows: number) => void;
+  /**
+   * FIX RS-2: Check if terminal is recovering from WebGL context loss
+   * Resize should be blocked during recovery to prevent dimension mismatch
+   */
+  isRecovering?: () => boolean;
+}
+
+/**
+ * Options for registering a resize target.
+ */
+export interface RegisterOptions {
+  /**
+   * Skip the initial resize that normally happens on register.
+   * Use this when the caller will do their own fit() after async setup (e.g., WebGL init).
+   */
+  skipInitialResize?: boolean;
 }
 
 interface PendingResize {
@@ -53,50 +69,75 @@ export function useResizeCoordinator() {
   }, []);
 
   const performAtomicResize = useCallback((target: ResizeTarget) => {
-    try {
-      const dims = target.fitAddon.proposeDimensions();
-      if (!dims || dims.cols < MIN_COLS || dims.rows < MIN_ROWS) {
-        return;
-      }
+    // FIX RS-2: Skip resize if terminal is recovering from WebGL context loss
+    if (target.isRecovering?.()) {
+      console.debug(`[ResizeCoordinator] Skipping resize for ${target.id} - recovery in progress`);
+      return;
+    }
 
-      const pending = pendingResizesRef.current.get(target.id);
-      if (pending && pending.cols === dims.cols && pending.rows === dims.rows) {
-        return;
-      }
-
-      target.fitAddon.fit();
-
-      if (target.onResize) {
-        const existingPending = pendingResizesRef.current.get(target.id);
-        if (existingPending) {
-          clearTimeout(existingPending.timeoutId);
+    // FIX RS-1: Wait for CSS paint with double RAF
+    // This prevents black screen where WebGL canvas hasn't resized yet
+    // First RAF: queues callback for next frame
+    // Second RAF: ensures CSS transitions have completed and browser has painted
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // FIX RS-2: Double-check recovery status after RAF delay
+        // Recovery might have started during the RAF delay
+        if (target.isRecovering?.()) {
+          console.debug(`[ResizeCoordinator] Aborting resize for ${target.id} - recovery started during RAF`);
+          return;
         }
 
-        const timeoutId = setTimeout(() => {
-          pendingResizesRef.current.delete(target.id);
-        }, RESIZE_TIMEOUT_MS);
+        try {
+          const dims = target.fitAddon.proposeDimensions();
+          if (!dims || dims.cols < MIN_COLS || dims.rows < MIN_ROWS) {
+            return;
+          }
 
-        pendingResizesRef.current.set(target.id, {
-          cols: dims.cols,
-          rows: dims.rows,
-          expiresAt: Date.now() + RESIZE_TIMEOUT_MS,
-          timeoutId,
-        });
+          const pending = pendingResizesRef.current.get(target.id);
+          if (pending && pending.cols === dims.cols && pending.rows === dims.rows) {
+            return;
+          }
 
-        target.onResize(dims.cols, dims.rows);
-      }
-    } catch (e) {
-      console.warn(`[ResizeCoordinator] Atomic resize failed for ${target.id}:`, e);
-    }
+          target.fitAddon.fit();
+
+          if (target.onResize) {
+            const existingPending = pendingResizesRef.current.get(target.id);
+            if (existingPending) {
+              clearTimeout(existingPending.timeoutId);
+            }
+
+            const timeoutId = setTimeout(() => {
+              pendingResizesRef.current.delete(target.id);
+            }, RESIZE_TIMEOUT_MS);
+
+            pendingResizesRef.current.set(target.id, {
+              cols: dims.cols,
+              rows: dims.rows,
+              expiresAt: Date.now() + RESIZE_TIMEOUT_MS,
+              timeoutId,
+            });
+
+            target.onResize(dims.cols, dims.rows);
+          }
+        } catch (e) {
+          console.warn(`[ResizeCoordinator] Atomic resize failed for ${target.id}:`, e);
+        }
+      });
+    });
   }, []);
 
-  const register = useCallback((target: ResizeTarget) => {
+  const register = useCallback((target: ResizeTarget, options?: RegisterOptions) => {
     targetsRef.current.set(target.id, target);
 
-    requestAnimationFrame(() => {
-      if (!targetsRef.current.has(target.id)) return;
-      performAtomicResize(target);
-    });
+    // Only auto-resize if not skipped
+    // TerminalCore skips this to do its own fit() after WebGL is ready
+    if (!options?.skipInitialResize) {
+      requestAnimationFrame(() => {
+        if (!targetsRef.current.has(target.id)) return;
+        performAtomicResize(target);
+      });
+    }
 
     return () => {
       targetsRef.current.delete(target.id);
