@@ -6,6 +6,7 @@ import { useTerminalCore } from '../../hooks/useTerminalCore';
 import { useXTermSetup } from '../../hooks/useXTermSetup';
 import { useRendererSetup } from '../../hooks/useRendererSetup';
 import { useResizeCoordinatorContext } from '../../contexts/ResizeCoordinatorContext';
+import type { WebGLHealthMonitor } from '../../services/WebGLHealthMonitor';
 
 /**
  * Props for the TerminalCore component
@@ -76,6 +77,11 @@ export interface TerminalCoreProps {
    * Used to block resize operations during recovery
    */
   isRecovering?: () => boolean;
+
+  /**
+   * Optional: Health monitor for proactive GPU memory management
+   */
+  healthMonitor?: WebGLHealthMonitor;
 }
 
 /**
@@ -165,6 +171,7 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
       onRecoveryStart,
       onRecoveryEnd,
       isRecovering,
+      healthMonitor,
     } = props;
 
     // Hook 1: Core terminal lifecycle
@@ -182,6 +189,7 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
       enableWebGL,
       onRecoveryStart,
       onRecoveryEnd,
+      healthMonitor,
     });
 
     // Hook 4: Resize coordination (existing from Sprint 1)
@@ -245,6 +253,7 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
               fitAddon,
               onResize,
               isRecovering,  // FIX RS-2: Pass recovery check to block resize during recovery
+              getTermElement: () => containerRef.current,  // FIX WG-1: For canvas dimension verification
             },
             { skipInitialResize: true }
           );

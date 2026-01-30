@@ -36,6 +36,7 @@ import { useClipboardUpload } from './hooks/useClipboardUpload';
 import { useToast } from './components/Toast/Toast';
 import { uploadService } from './services/uploadService';
 import { OutputPipelineManager } from './services/OutputPipelineManager';
+import { WebGLHealthMonitor, exposeMetricsToWindow } from './services/WebGLHealthMonitor';
 
 import { ResizeCoordinatorContext } from './contexts/ResizeCoordinatorContext';
 
@@ -326,6 +327,7 @@ export default function App() {
   const addArtifactRef = useRef(addArtifact);
   addArtifactRef.current = addArtifact;
   const outputPipelineRef = useRef<OutputPipelineManager | null>(null);
+  const healthMonitorRef = useRef<WebGLHealthMonitor | null>(null);
   const pendingRestoreRef = useRef<Map<string, string>>(new Map());
   const selectionRefs = useRef<Map<string, string>>(new Map()); // Track selection per window for WebGL
   const restoreNeededAfterRecoveryRef = useRef<Set<string>>(new Set()); // Windows that need restore after WebGL recovery
@@ -565,7 +567,23 @@ export default function App() {
         break;
 
       case 'todo:allSessions':
-        setTodoSessions(msg.sessions || []);
+        console.log('[App] Received todo:allSessions:', {
+          sessionCount: msg.sessions?.length || 0,
+          totalTodos: msg.sessions?.reduce((sum: number, s: SessionTodos) => sum + s.todos.length, 0) || 0,
+          sessions: msg.sessions,
+        });
+        // Filter to only show sessions updated in the last hour (3600000 ms)
+        const now = Date.now();
+        const oneHourAgo = now - 3600000;
+        const recentSessions = (msg.sessions || []).filter(
+          (session: SessionTodos) => session.lastModified > oneHourAgo
+        );
+        console.log('[App] Filtered to recent sessions:', {
+          total: msg.sessions?.length || 0,
+          recent: recentSessions.length,
+          filtered: (msg.sessions?.length || 0) - recentSessions.length,
+        });
+        setTodoSessions(recentSessions);
         setTodosLoading(false);
         break;
 
@@ -626,11 +644,20 @@ export default function App() {
   // Track if we're subscribed to todo updates
   const todoSubscribedRef = useRef(false);
 
+  // Reset subscription state when disconnected
+  useEffect(() => {
+    if (connectionState === 'disconnected' || connectionState === 'connecting') {
+      todoSubscribedRef.current = false;
+      setTodosLoading(true);
+    }
+  }, [connectionState]);
+
   // Subscribe to todo updates once when connected
   useEffect(() => {
     if (!sendMessageRef.current || connectionState !== 'connected') return;
 
     if (!todoSubscribedRef.current) {
+      console.log('[App] Subscribing to todo updates');
       setTodosLoading(true);
       sendMessageRef.current({ type: 'todo:subscribe', windowId: 'global' });
       todoSubscribedRef.current = true;
@@ -648,9 +675,35 @@ export default function App() {
       }
     };
 
-    outputPipelineRef.current = new OutputPipelineManager(writeToTerminal);
+    // Create health monitor with metrics callback
+    const healthMonitor = new WebGLHealthMonitor((metrics) => {
+      // Log metrics to console for Phase 1 analysis
+      if (metrics.recommendation !== 'normal') {
+        console.warn('[WebGLHealth] Recommendation:', metrics.recommendation, 'Score:', metrics.healthScore);
+      }
+
+      // TODO Phase 3: Implement proactive actions based on recommendation
+      // - 'light_throttle': Already handled by OutputPipelineManager
+      // - 'reduce_quality': Reduce scrollback, increase throttling
+      // - 'warn_user': Show toast notification
+      // - 'reinit_required': Trigger WebGL reinitialization
+    });
+    healthMonitorRef.current = healthMonitor;
+
+    // Start periodic metrics reporting
+    healthMonitor.start();
+
+    // Expose to window for debugging (Phase 1 validation)
+    exposeMetricsToWindow(healthMonitor);
+
+    // Create output pipeline with health monitor
+    outputPipelineRef.current = new OutputPipelineManager(writeToTerminal, {
+      healthMonitor,
+    });
 
     return () => {
+      healthMonitor.stop();
+      healthMonitorRef.current = null;
       outputPipelineRef.current?.clearAll();
       outputPipelineRef.current = null;
     };
@@ -697,7 +750,7 @@ export default function App() {
         try { terminal.fitAddon.fit(); } catch {}
       }
       fitTimeoutRef.current.delete(id);
-    }, 250);  // FIX RS-4: 200ms CSS transition + 50ms buffer (was 150ms)
+    }, 350);  // FIX WG-4: 200ms CSS transition + 150ms buffer for slower devices (was 250ms)
     fitTimeoutRef.current.set(id, timeout);
   }, [sendMessage]);
 
@@ -921,6 +974,7 @@ export default function App() {
           onRecoveryStart={handleRecoveryStart}
           onRecoveryEnd={handleRecoveryEnd}
           isRecovering={() => outputPipelineRef.current?.isRecoveryInProgress(windowId) ?? false}
+          healthMonitor={healthMonitorRef.current ?? undefined}
           fontSize={fontSize}
           terminalId={windowId}
         />

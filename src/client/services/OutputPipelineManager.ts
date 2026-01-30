@@ -1,10 +1,23 @@
+import type { WebGLHealthMonitor } from './WebGLHealthMonitor';
+
 export interface OutputPipelineConfig {
   flushIntervalMs?: number;
+  healthMonitor?: WebGLHealthMonitor;
 }
 
 // Maximum buffer size before truncation (512KB)
 // Prevents unbounded memory growth during recovery or when RAF is blocked
 const MAX_BUFFER_SIZE = 512 * 1024;
+
+// Volume-based throttling constants (Phase 2: bytes/sec instead of flushes/sec)
+// These thresholds correlate with GPU memory pressure better than frequency
+const THROTTLE_WINDOW_MS = 1000;
+const BYTES_PER_SEC_LIGHT = 50_000;    // 50KB/sec - normal Claude thinking
+const BYTES_PER_SEC_HEAVY = 150_000;   // 150KB/sec - build output
+const BYTES_PER_SEC_CRITICAL = 500_000; // 500KB/sec - catastrophic output
+const LIGHT_THROTTLE_DELAY = 32;       // ~30fps
+const HEAVY_THROTTLE_DELAY = 100;      // ~10fps
+const CRITICAL_THROTTLE_DELAY = 200;   // ~5fps
 
 interface WindowOutputState {
   buffer: string;
@@ -13,6 +26,11 @@ interface WindowOutputState {
   pendingResizeBuffer: string;
   restoreInProgress: boolean;
   recoveryInProgress: boolean;
+  // Volume-based throttling state (Phase 2)
+  windowStartTime: number;
+  bytesInWindow: number;
+  flushCountInWindow: number; // Keep for telemetry
+  throttleMode: 'normal' | 'light' | 'heavy' | 'critical';
 }
 
 export type FlushCallback = (windowId: string, data: string) => void;
@@ -20,9 +38,24 @@ export type FlushCallback = (windowId: string, data: string) => void;
 export class OutputPipelineManager {
   private windows: Map<string, WindowOutputState> = new Map();
   private onFlush: FlushCallback;
+  private healthMonitor?: WebGLHealthMonitor;
 
-  constructor(onFlush: FlushCallback) {
+  constructor(onFlush: FlushCallback, config?: OutputPipelineConfig) {
     this.onFlush = onFlush;
+    this.healthMonitor = config?.healthMonitor;
+  }
+
+  /**
+   * Cancel a pending flush timer, handling both RAF and setTimeout
+   * Since throttle level can change, we cancel both ways to be safe
+   */
+  private cancelFlushTimer(state: WindowOutputState): void {
+    if (state.flushTimer !== null) {
+      // Cancel both setTimeout and RAF - one will no-op
+      clearTimeout(state.flushTimer);
+      cancelAnimationFrame(state.flushTimer);
+      state.flushTimer = null;
+    }
   }
 
   private getOrCreateState(windowId: string): WindowOutputState {
@@ -35,6 +68,10 @@ export class OutputPipelineManager {
         pendingResizeBuffer: '',
         restoreInProgress: false,
         recoveryInProgress: false,
+        windowStartTime: performance.now(),
+        bytesInWindow: 0,
+        flushCountInWindow: 0,
+        throttleMode: 'normal',
       };
       this.windows.set(windowId, state);
     }
@@ -45,23 +82,84 @@ export class OutputPipelineManager {
     const state = this.windows.get(windowId);
     if (!state) return;
 
-    // Coalesced scheduling: don't cancel existing RAF
+    // Coalesced scheduling: don't cancel existing timer/RAF
     // Multiple enqueue() calls will batch into a single flush
-    // This prevents frame drops during high-volume output (builds, logs)
     if (state.flushTimer !== null) {
       return; // Already scheduled - buffer will be flushed
     }
 
-    state.flushTimer = requestAnimationFrame(() => {
-      const currentState = this.windows.get(windowId);
-      if (!currentState || !currentState.buffer) return;
+    // PHASE 2: Volume-based throttling (bytes/sec not flushes/sec)
+    const now = performance.now();
+    const windowElapsed = now - state.windowStartTime;
 
-      const data = currentState.buffer;
-      currentState.buffer = '';
-      currentState.flushTimer = null;
+    if (windowElapsed > THROTTLE_WINDOW_MS) {
+      // Window expired - calculate bytes/sec and reset
+      const bytesPerSec = (state.bytesInWindow / windowElapsed) * 1000;
+
+      // Update throttle mode based on byte rate
+      const prevMode = state.throttleMode;
+      if (bytesPerSec > BYTES_PER_SEC_CRITICAL) {
+        state.throttleMode = 'critical';
+      } else if (bytesPerSec > BYTES_PER_SEC_HEAVY) {
+        state.throttleMode = 'heavy';
+      } else if (bytesPerSec > BYTES_PER_SEC_LIGHT) {
+        state.throttleMode = 'light';
+      } else {
+        state.throttleMode = 'normal';
+      }
+
+      if (state.throttleMode !== prevMode && state.throttleMode !== 'normal') {
+        console.debug(
+          `[OutputPipeline] ${windowId}: Throttle ${prevMode} → ${state.throttleMode} ` +
+          `(${(bytesPerSec / 1024).toFixed(1)} KB/s, ${state.flushCountInWindow} flushes/sec)`
+        );
+      }
+
+      // Reset window
+      state.windowStartTime = now;
+      state.bytesInWindow = 0;
+      state.flushCountInWindow = 0;
+    }
+
+    state.flushCountInWindow++;
+
+    // Apply delay based on throttle mode
+    const delay =
+      state.throttleMode === 'critical' ? CRITICAL_THROTTLE_DELAY :
+      state.throttleMode === 'heavy' ? HEAVY_THROTTLE_DELAY :
+      state.throttleMode === 'light' ? LIGHT_THROTTLE_DELAY : 0;
+
+    if (delay > 0) {
+      // Use setTimeout for throttled flush
+      state.flushTimer = window.setTimeout(() => {
+        this.performFlush(windowId);
+      }, delay) as unknown as number;
+    } else {
+      // Use RAF for normal flush (maximum responsiveness)
+      state.flushTimer = requestAnimationFrame(() => {
+        this.performFlush(windowId);
+      });
+    }
+  }
+
+  private performFlush(windowId: string): void {
+    const state = this.windows.get(windowId);
+    if (!state) return;
+
+    const data = state.buffer;
+    const byteCount = data.length;
+    state.buffer = '';
+    state.flushTimer = null;
+
+    if (data) {
+      // Track bytes for volume-based throttling
+      state.bytesInWindow += byteCount;
+
+      // Report to health monitor if available
+      this.healthMonitor?.recordFlush(byteCount);
 
       this.onFlush(windowId, data);
-    });
+    }
   }
 
   enqueue(windowId: string, data: string): void {
@@ -104,10 +202,7 @@ export class OutputPipelineManager {
     const state = this.windows.get(windowId);
     if (!state) return '';
 
-    if (state.flushTimer !== null) {
-      cancelAnimationFrame(state.flushTimer);
-      state.flushTimer = null;
-    }
+    this.cancelFlushTimer(state);
 
     const data = state.buffer;
     state.buffer = '';
@@ -147,10 +242,7 @@ export class OutputPipelineManager {
 
     if (inProgress) {
       // Clear all buffers when entering restore mode
-      if (state.flushTimer !== null) {
-        cancelAnimationFrame(state.flushTimer);
-        state.flushTimer = null;
-      }
+      this.cancelFlushTimer(state);
       state.buffer = '';
       state.pendingResizeBuffer = '';
     }
@@ -181,16 +273,19 @@ export class OutputPipelineManager {
 
     if (inProgress) {
       // Clear all buffers when entering recovery mode
-      if (state.flushTimer !== null) {
-        cancelAnimationFrame(state.flushTimer);
-        state.flushTimer = null;
-      }
+      this.cancelFlushTimer(state);
       state.buffer = '';
       state.pendingResizeBuffer = '';
 
       // FIX RS-3: Also clear resize pending flag
       // This prevents output from being buffered in resize buffer during recovery
       state.resizePending = false;
+
+      // Reset throttle state for clean recovery
+      state.throttleMode = 'normal';
+      state.bytesInWindow = 0;
+      state.flushCountInWindow = 0;
+      state.windowStartTime = performance.now();
 
       console.info(`[OutputPipeline] ${windowId}: Entering recovery mode, buffers cleared, resize flag reset`);
     } else {
@@ -207,17 +302,15 @@ export class OutputPipelineManager {
 
   clear(windowId: string): void {
     const state = this.windows.get(windowId);
-    if (state && state.flushTimer !== null) {
-      cancelAnimationFrame(state.flushTimer);
+    if (state) {
+      this.cancelFlushTimer(state);
     }
     this.windows.delete(windowId);
   }
 
   clearAll(): void {
     this.windows.forEach((state) => {
-      if (state.flushTimer !== null) {
-        cancelAnimationFrame(state.flushTimer);
-      }
+      this.cancelFlushTimer(state);
     });
     this.windows.clear();
   }

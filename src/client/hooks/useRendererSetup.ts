@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
+import type { WebGLHealthMonitor } from '../services/WebGLHealthMonitor';
 
 export type RendererType = 'webgl';
 
@@ -35,6 +36,10 @@ export interface UseRendererSetupOptions {
    * @param success - true if recovery succeeded, false if it failed
    */
   onRecoveryEnd?: (terminalId: string, success: boolean) => void;
+  /**
+   * Health monitor for proactive GPU memory management
+   */
+  healthMonitor?: WebGLHealthMonitor;
 }
 
 export interface UseRendererSetupReturn {
@@ -49,6 +54,56 @@ const MAX_RECOVERY_ATTEMPTS = 3;
 const RECOVERY_SCROLLBACK_LIMIT = 5000;
 // Timeout for WebGL initialization to prevent hanging
 const WEBGL_INIT_TIMEOUT_MS = 3000;
+// Tolerance for canvas dimension validation (pixels)
+const CANVAS_DIMENSION_TOLERANCE = 10;
+
+/**
+ * FIX WG-3: Validate WebGL state after recovery
+ * Checks that WebGL context is valid and canvas dimensions match container
+ */
+function validateWebGLState(
+  term: XTerm,
+  _terminalId: string
+): { valid: boolean; issues: string[] } {
+  const issues: string[] = [];
+
+  if (!term.element) {
+    issues.push('Terminal element not found');
+    return { valid: false, issues };
+  }
+
+  const canvases = term.element.querySelectorAll('canvas');
+  let webglCanvas: HTMLCanvasElement | null = null;
+
+  for (const canvas of canvases) {
+    try {
+      const gl = (canvas as HTMLCanvasElement).getContext('webgl2');
+      if (gl) {
+        webglCanvas = canvas as HTMLCanvasElement;
+        if (gl.isContextLost()) {
+          issues.push('WebGL context is lost');
+        }
+        break;
+      }
+    } catch {
+      // Context type mismatch
+    }
+  }
+
+  if (!webglCanvas) {
+    issues.push('WebGL canvas not found');
+  } else {
+    const rect = term.element.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const expectedWidth = Math.floor(rect.width * dpr);
+
+    if (Math.abs(webglCanvas.width - expectedWidth) > CANVAS_DIMENSION_TOLERANCE) {
+      issues.push(`Canvas width mismatch: ${webglCanvas.width} vs expected ~${expectedWidth}`);
+    }
+  }
+
+  return { valid: issues.length === 0, issues };
+}
 
 export function useRendererSetup(
   options: UseRendererSetupOptions = {}
@@ -59,6 +114,7 @@ export function useRendererSetup(
     onStateChange,
     onRecoveryStart,
     onRecoveryEnd,
+    healthMonitor,
   } = options;
 
   const rendererStateRef = useRef<RendererState>({ status: 'idle' });
@@ -110,6 +166,9 @@ export function useRendererSetup(
 
       webglAddon.onContextLoss(() => {
         console.error(`[${terminalId}] WebGL context lost`);
+
+        // Report context loss to health monitor
+        healthMonitor?.recordContextLoss();
 
         if (recoveryAttemptsRef.current < MAX_RECOVERY_ATTEMPTS) {
           recoveryAttemptsRef.current++;
@@ -221,6 +280,37 @@ export function useRendererSetup(
       if (isRecovery) {
         recoveryAttemptsRef.current = 0;
         console.info(`[${terminalId}] WebGL recovery successful - counter reset`);
+
+        // Reset health monitor after successful recovery
+        healthMonitor?.reset();
+
+        // FIX WG-3: Validate WebGL state after recovery
+        const validation = validateWebGLState(term, terminalId);
+        if (!validation.valid) {
+          console.warn(`[${terminalId}] WebGL validation issues after recovery:`, validation.issues);
+          // Schedule a fit to attempt self-correction
+          // The resize coordinator will verify canvas dimensions
+          requestAnimationFrame(() => {
+            if (!mountedRef.current || !term.element) return;
+            try {
+              // Find FitAddon in loaded addons and trigger fit
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const addons = (term as any)._addonManager?._addons;
+              if (addons) {
+                for (const addon of addons) {
+                  if (addon?.instance?.fit && typeof addon.instance.fit === 'function') {
+                    addon.instance.fit();
+                    console.debug(`[${terminalId}] Post-recovery fit triggered`);
+                    break;
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn(`[${terminalId}] Post-recovery fit failed:`, e);
+            }
+          });
+        }
+
         // Notify that recovery succeeded - pipeline can resume
         onRecoveryEnd?.(terminalId, true);
       } else {
