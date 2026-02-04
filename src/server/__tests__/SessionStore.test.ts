@@ -314,6 +314,7 @@ describe('SessionStore', () => {
         create_window: 0,
         window_name: null,
         enabled: 1,
+        run_count: 0,
       });
 
       expect(automation.id).toBe('auto-1');
@@ -333,6 +334,7 @@ describe('SessionStore', () => {
         create_window: 0,
         window_name: null,
         enabled: 1,
+        run_count: 0,
       });
 
       store.createAutomation({
@@ -347,6 +349,7 @@ describe('SessionStore', () => {
         create_window: 0,
         window_name: null,
         enabled: 1,
+        run_count: 0,
       });
 
       const automations = store.getAutomationsBySession('auto-test-session', 'test@example.com');
@@ -366,6 +369,7 @@ describe('SessionStore', () => {
         create_window: 0,
         window_name: null,
         enabled: 1,
+        run_count: 0,
       });
 
       store.toggleAutomation('toggle-test', 'test@example.com');

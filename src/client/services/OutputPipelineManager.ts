@@ -39,10 +39,22 @@ export class OutputPipelineManager {
   private windows: Map<string, WindowOutputState> = new Map();
   private onFlush: FlushCallback;
   private healthMonitor?: WebGLHealthMonitor;
+  private forcedThrottleMode?: 'light' | 'heavy' | 'critical';
 
   constructor(onFlush: FlushCallback, config?: OutputPipelineConfig) {
     this.onFlush = onFlush;
     this.healthMonitor = config?.healthMonitor;
+  }
+
+  /**
+   * Set forced throttle mode override based on health score.
+   * When set, the effective throttle mode will be the most conservative
+   * between the forced mode and the calculated mode.
+   *
+   * @param mode - Forced throttle mode, or undefined to clear override
+   */
+  setForcedThrottleMode(mode?: 'light' | 'heavy' | 'critical'): void {
+    this.forcedThrottleMode = mode;
   }
 
   /**
@@ -92,30 +104,37 @@ export class OutputPipelineManager {
     const now = performance.now();
     const windowElapsed = now - state.windowStartTime;
 
+    // Calculate throttle mode based on current or expired window
+    let shouldResetWindow = false;
     if (windowElapsed > THROTTLE_WINDOW_MS) {
-      // Window expired - calculate bytes/sec and reset
-      const bytesPerSec = (state.bytesInWindow / windowElapsed) * 1000;
+      shouldResetWindow = true;
+    }
 
-      // Update throttle mode based on byte rate
-      const prevMode = state.throttleMode;
-      if (bytesPerSec > BYTES_PER_SEC_CRITICAL) {
-        state.throttleMode = 'critical';
-      } else if (bytesPerSec > BYTES_PER_SEC_HEAVY) {
-        state.throttleMode = 'heavy';
-      } else if (bytesPerSec > BYTES_PER_SEC_LIGHT) {
-        state.throttleMode = 'light';
-      } else {
-        state.throttleMode = 'normal';
-      }
+    // Calculate bytes/sec for throttle mode decision
+    const effectiveElapsed = Math.max(windowElapsed, 1); // Avoid division by zero
+    const bytesPerSec = (state.bytesInWindow / effectiveElapsed) * 1000;
 
-      if (state.throttleMode !== prevMode && state.throttleMode !== 'normal') {
-        console.debug(
-          `[OutputPipeline] ${windowId}: Throttle ${prevMode} → ${state.throttleMode} ` +
-          `(${(bytesPerSec / 1024).toFixed(1)} KB/s, ${state.flushCountInWindow} flushes/sec)`
-        );
-      }
+    // Update throttle mode based on byte rate
+    const prevMode = state.throttleMode;
+    if (bytesPerSec > BYTES_PER_SEC_CRITICAL) {
+      state.throttleMode = 'critical';
+    } else if (bytesPerSec > BYTES_PER_SEC_HEAVY) {
+      state.throttleMode = 'heavy';
+    } else if (bytesPerSec > BYTES_PER_SEC_LIGHT) {
+      state.throttleMode = 'light';
+    } else {
+      state.throttleMode = 'normal';
+    }
 
-      // Reset window
+    if (state.throttleMode !== prevMode && state.throttleMode !== 'normal') {
+      console.debug(
+        `[OutputPipeline] ${windowId}: Throttle ${prevMode} → ${state.throttleMode} ` +
+        `(${(bytesPerSec / 1024).toFixed(1)} KB/s, ${state.flushCountInWindow} flushes/sec)`
+      );
+    }
+
+    // Reset window if expired
+    if (shouldResetWindow) {
       state.windowStartTime = now;
       state.bytesInWindow = 0;
       state.flushCountInWindow = 0;
@@ -123,11 +142,20 @@ export class OutputPipelineManager {
 
     state.flushCountInWindow++;
 
-    // Apply delay based on throttle mode
+    // Determine effective throttle mode (most conservative of forced vs calculated)
+    let effectiveMode = state.throttleMode;
+    if (this.forcedThrottleMode) {
+      const modes: Array<'normal' | 'light' | 'heavy' | 'critical'> = ['normal', 'light', 'heavy', 'critical'];
+      const forcedIdx = modes.indexOf(this.forcedThrottleMode);
+      const calculatedIdx = modes.indexOf(state.throttleMode);
+      effectiveMode = modes[Math.max(forcedIdx, calculatedIdx)] as typeof effectiveMode;
+    }
+
+    // Apply delay based on effective throttle mode
     const delay =
-      state.throttleMode === 'critical' ? CRITICAL_THROTTLE_DELAY :
-      state.throttleMode === 'heavy' ? HEAVY_THROTTLE_DELAY :
-      state.throttleMode === 'light' ? LIGHT_THROTTLE_DELAY : 0;
+      effectiveMode === 'critical' ? CRITICAL_THROTTLE_DELAY :
+      effectiveMode === 'heavy' ? HEAVY_THROTTLE_DELAY :
+      effectiveMode === 'light' ? LIGHT_THROTTLE_DELAY : 0;
 
     if (delay > 0) {
       // Use setTimeout for throttled flush
@@ -152,9 +180,6 @@ export class OutputPipelineManager {
     state.flushTimer = null;
 
     if (data) {
-      // Track bytes for volume-based throttling
-      state.bytesInWindow += byteCount;
-
       // Report to health monitor if available
       this.healthMonitor?.recordFlush(byteCount);
 
@@ -194,6 +219,9 @@ export class OutputPipelineManager {
       state.buffer = state.buffer.slice(excess);
       console.warn(`[OutputPipeline] ${windowId}: Buffer truncated, discarded ${excess} bytes`);
     }
+
+    // Track bytes for throttle calculation (now tracks on enqueue, not just flush)
+    state.bytesInWindow += data.length;
 
     this.scheduleFlush(windowId);
   }

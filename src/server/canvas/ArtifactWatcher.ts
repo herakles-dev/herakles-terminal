@@ -5,7 +5,6 @@ import { EventEmitter } from 'events';
 import { logger } from '../utils/logger.js';
 
 const CANVAS_DIR = process.env.CANVAS_DIR || join(process.env.HOME || '/home/hercules', '.canvas', 'artifacts');
-const CLEANUP_AFTER_MS = 60 * 60 * 1000;
 const POLL_INTERVAL_MS = 500;
 
 export interface CanvasArtifact {

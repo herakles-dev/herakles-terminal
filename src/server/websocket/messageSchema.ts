@@ -73,6 +73,23 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     windowId: uuidSchema,
     name: z.string().min(1).max(100),
   }),
+  z.object({
+    type: z.literal('todo:subscribe'),
+    windowId: z.string().min(1), // Accepts 'global' or any string (session-based, not window-based)
+  }),
+  z.object({
+    type: z.literal('todo:unsubscribe'),
+    windowId: z.string().min(1), // Accepts 'global' or any string
+  }),
+  z.object({
+    type: z.literal('context:subscribe'),
+    windowId: uuidSchema,
+    projectPath: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal('context:unsubscribe'),
+    windowId: uuidSchema,
+  }),
 ]);
 
 export type ValidatedClientMessage = z.infer<typeof ClientMessageSchema>;

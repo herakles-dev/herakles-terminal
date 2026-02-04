@@ -93,6 +93,7 @@ export function useXTermSetup(options: UseXTermSetupOptions = {}): UseXTermSetup
       windowsMode: false,
       fastScrollModifier: 'alt',
       fastScrollSensitivity: 5,
+      rightClickSelectsWord: false,  // Don't auto-select word on right-click (interferes with WebGL selection)
     };
 
     // Merge with additional options (user overrides take precedence)

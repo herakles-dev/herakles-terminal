@@ -207,7 +207,7 @@ export class TmuxManager {
     try {
       const { stdout } = await execAsync(`tmux -S ${this.baseSocketDir}/* list-sessions 2>/dev/null || true`);
       const sessionCount = stdout.trim().split('\n').filter(Boolean).length;
-      
+
       return {
         healthy: true,
         activeSessions: sessionCount,
@@ -221,7 +221,49 @@ export class TmuxManager {
     }
   }
 
-  async capturePane(sessionId: string, visibleOnly = true): Promise<string> {
+  /**
+   * Get the current working directory of a tmux session.
+   * Returns null if unable to determine the cwd.
+   */
+  async getCurrentWorkingDirectory(sessionId: string): Promise<string | null> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    if (!(await this.sessionExists(sessionId))) {
+      return null;
+    }
+
+    try {
+      const { stdout } = await execAsync(
+        `tmux -S ${socketPath} display-message -p -t ${sessionName} "#{pane_current_path}"`
+      );
+      return stdout.trim() || null;
+    } catch (error) {
+      console.warn(`[TmuxManager] Failed to get cwd for ${sessionId}:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  /**
+   * Capture pane content with adaptive scrollback based on health score.
+   *
+   * @param sessionId - UUID of the tmux session
+   * @param options - Capture options
+   * @param options.visibleOnly - If true, only capture visible content (default: true)
+   * @param options.healthScore - WebGL health score (0-100). Lower scores reduce scrollback to prevent memory spikes.
+   *   - 80-100: 5000 lines (normal)
+   *   - 60-79:  2500 lines (50% reduction)
+   *   - 40-59:  1000 lines (80% reduction)
+   *   - 0-39:   500 lines (90% reduction)
+   */
+  async capturePane(
+    sessionId: string,
+    options: { visibleOnly?: boolean; healthScore?: number } = {}
+  ): Promise<string> {
+    const { visibleOnly = true, healthScore = 100 } = options;
+
     this.validateUUID(sessionId);
 
     const socketPath = this.getSocketPath(sessionId);
@@ -232,14 +274,52 @@ export class TmuxManager {
     }
 
     try {
-      const scrollbackFlag = visibleOnly ? '' : '-S -50000';
+      // Calculate adaptive scrollback based on health score
+      let scrollbackLines = 5000;  // Default for healthy state
+      if (!visibleOnly) {
+        if (healthScore < 40) {
+          scrollbackLines = 500;   // 90% reduction (critical)
+        } else if (healthScore < 60) {
+          scrollbackLines = 1000;  // 80% reduction (moderate)
+        } else if (healthScore < 80) {
+          scrollbackLines = 2500;  // 50% reduction (light)
+        }
+        // healthScore >= 80: use default 5000 lines
+      }
+
+      const scrollbackFlag = visibleOnly ? '' : `-S -${scrollbackLines}`;
       const { stdout } = await execAsync(
-        `tmux -S ${socketPath} capture-pane -t ${sessionName} -p -e ${scrollbackFlag} 2>/dev/null || true`,
+        `tmux -S ${socketPath} capture-pane -t ${sessionName} -p -e -J ${scrollbackFlag} 2>/dev/null || true`,
         { maxBuffer: 10 * 1024 * 1024 }
       );
-      return stdout;
+      // Normalize line endings: convert bare LF to CRLF for xterm.js compatibility
+      // Only convert LF not preceded by CR to avoid double-converting existing CRLF
+      return stdout.replace(/(?<!\r)\n/g, '\r\n');
     } catch {
       return '';
+    }
+  }
+
+  /**
+   * Clear the pane's scrollback history.
+   * Useful after WebGL recovery to prevent stale content from being re-captured.
+   */
+  async clearPaneHistory(sessionId: string): Promise<void> {
+    this.validateUUID(sessionId);
+
+    const socketPath = this.getSocketPath(sessionId);
+    const sessionName = this.getSessionName(sessionId);
+
+    if (!(await this.sessionExists(sessionId))) {
+      return;
+    }
+
+    try {
+      await execAsync(
+        `tmux -S ${socketPath} clear-history -t ${sessionName} 2>/dev/null || true`
+      );
+    } catch {
+      // Silently ignore - clearing history is best-effort
     }
   }
 

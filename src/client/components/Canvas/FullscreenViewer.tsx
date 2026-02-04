@@ -103,8 +103,15 @@ export default function FullscreenViewer({
   }, [onClose, handleZoomIn, handleZoomOut, handleFitToScreen, handleCopy, onSendToTerminal, artifact.content]);
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-sm flex flex-col">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#27272a] bg-[#0a0a0f]">
+    <div
+      className="fixed inset-0 z-[100] flex flex-col animate-in fade-in duration-200"
+      style={{
+        background: 'rgba(0, 0, 0, 0.92)',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+      }}
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-gradient-to-r from-[#08080e] via-[#0c0c14] to-[#08080e]">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <span className="text-[#00d4ff] text-sm font-medium">
@@ -247,7 +254,14 @@ export default function FullscreenViewer({
             transition: isDragging ? 'none' : 'transform 0.1s ease-out',
           }}
         >
-          <div className="max-w-4xl w-full max-h-full overflow-auto bg-[#0f0f14] rounded-xl border border-[#27272a] shadow-2xl">
+          <div
+            className="max-w-4xl w-full max-h-full overflow-auto rounded-xl animate-in zoom-in-95 duration-200"
+            style={{
+              background: 'linear-gradient(180deg, #0c0c14 0%, #08080e 100%)',
+              border: '1px solid rgba(0, 212, 255, 0.1)',
+              boxShadow: '0 0 80px rgba(0, 212, 255, 0.08), 0 25px 50px -12px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03)',
+            }}
+          >
             <div className="p-6">
               <ArtifactRenderer artifact={artifact} viewMode={viewMode} />
             </div>
@@ -255,13 +269,13 @@ export default function FullscreenViewer({
         </div>
       </div>
 
-      <div className="flex items-center justify-center gap-4 px-4 py-2 border-t border-[#27272a] bg-[#0a0a0f] text-[10px] text-[#52525b]">
-        <span><kbd className="px-1.5 py-0.5 bg-[#27272a] rounded">Esc</kbd> Close</span>
-        <span><kbd className="px-1.5 py-0.5 bg-[#27272a] rounded">+</kbd> / <kbd className="px-1.5 py-0.5 bg-[#27272a] rounded">-</kbd> Zoom</span>
-        <span><kbd className="px-1.5 py-0.5 bg-[#27272a] rounded">0</kbd> Reset</span>
-        <span><kbd className="px-1.5 py-0.5 bg-[#27272a] rounded">Ctrl</kbd> + Scroll to zoom</span>
-        <span><kbd className="px-1.5 py-0.5 bg-[#27272a] rounded">C</kbd> Copy</span>
-        <span><kbd className="px-1.5 py-0.5 bg-[#27272a] rounded">S</kbd> Send</span>
+      <div className="flex items-center justify-center gap-4 px-4 py-2.5 border-t border-white/[0.06] bg-gradient-to-r from-[#08080e] via-[#0c0c14] to-[#08080e] text-[11px] text-[#71717a]">
+        <span><kbd className="px-1.5 py-0.5 bg-white/[0.04] border border-white/[0.06] rounded text-[#a1a1aa]">Esc</kbd> Close</span>
+        <span><kbd className="px-1.5 py-0.5 bg-white/[0.04] border border-white/[0.06] rounded text-[#a1a1aa]">+</kbd> / <kbd className="px-1.5 py-0.5 bg-white/[0.04] border border-white/[0.06] rounded text-[#a1a1aa]">-</kbd> Zoom</span>
+        <span><kbd className="px-1.5 py-0.5 bg-white/[0.04] border border-white/[0.06] rounded text-[#a1a1aa]">0</kbd> Reset</span>
+        <span><kbd className="px-1.5 py-0.5 bg-white/[0.04] border border-white/[0.06] rounded text-[#a1a1aa]">Ctrl</kbd> + Scroll</span>
+        <span><kbd className="px-1.5 py-0.5 bg-white/[0.04] border border-white/[0.06] rounded text-[#a1a1aa]">C</kbd> Copy</span>
+        <span><kbd className="px-1.5 py-0.5 bg-white/[0.04] border border-white/[0.06] rounded text-[#a1a1aa]">S</kbd> Send</span>
       </div>
     </div>
   );

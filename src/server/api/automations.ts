@@ -277,27 +277,8 @@ export function automationRoutes(
         'Manual run'
       );
 
-      if (result.success && result.windowId && connectionManager && windowManager) {
-        const window = await windowManager.getWindow(result.windowId, req.user.email);
-        if (window) {
-          connectionManager.broadcastToSession(automation.session_id, {
-            type: 'window:created',
-            window: {
-              id: window.id,
-              sessionId: window.sessionId,
-              name: window.name,
-              autoName: window.autoName,
-              positionX: window.layout.x,
-              positionY: window.layout.y,
-              width: window.layout.width,
-              height: window.layout.height,
-              zIndex: window.zIndex,
-              isMain: window.isMain,
-              createdAt: window.createdAt,
-            },
-          });
-        }
-      }
+      // Note: window:created broadcast is handled by ConnectionManager.onWindowCreated callback
+      // to avoid duplicate messages (the callback also sets up window subscriptions)
 
       res.json({ data: result });
     } catch (error) {

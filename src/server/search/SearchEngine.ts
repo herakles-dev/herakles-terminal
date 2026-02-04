@@ -3,8 +3,6 @@ import { SearchResult, CommandTemplate, SearchOptions, SearchContext } from './t
 export class SearchEngine {
   private templates: CommandTemplate[] = [];
   private commandCache: Map<string, SearchResult[]> = new Map();
-  private cacheTimeout = 5 * 60 * 1000; // 5 minutes
-  private lastCacheTime = 0;
 
   setTemplates(templates: CommandTemplate[]): void {
     this.templates = templates;
@@ -292,6 +290,5 @@ export class SearchEngine {
 
   private clearCache(): void {
     this.commandCache.clear();
-    this.lastCacheTime = 0;
   }
 }

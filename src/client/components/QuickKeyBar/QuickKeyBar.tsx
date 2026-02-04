@@ -36,7 +36,7 @@ function useKeyboardOffset(): number {
   return offset;
 }
 
-export default function QuickKeyBar({ onKey, visible, onClose, onClear, onRefocus }: QuickKeyBarProps) {
+export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear, onRefocus }: QuickKeyBarProps) {
   const keyboardOffset = useKeyboardOffset();
   
   const triggerHaptic = useCallback(() => {
@@ -58,12 +58,6 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear, onRefocu
       onRefocus?.();
     }
   }, [onKey, triggerHaptic, onRefocus]);
-
-  const handleClear = useCallback(() => {
-    triggerHaptic();
-    onClear?.();
-    onRefocus?.();
-  }, [onClear, triggerHaptic, onRefocus]);
 
   const preventFocus = useCallback((e: React.TouchEvent | React.MouseEvent) => {
     e.preventDefault();

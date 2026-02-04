@@ -1,10 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import { TmuxManager } from '../tmux/TmuxManager.js';
 
-describe('TmuxManager', () => {
+// Check if tmux is available
+function isTmuxAvailable(): boolean {
+  try {
+    execSync('which tmux', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const hasTmux = isTmuxAvailable();
+
+describe.skipIf(!hasTmux)('TmuxManager', () => {
   let tmux: TmuxManager;
   const testSocket = '/tmp/zeus-test-' + Date.now() + '.sock';
-  const testSessionId = 'test-' + Date.now();
+  const testSessionId = randomUUID();
 
   beforeEach(() => {
     tmux = new TmuxManager(testSocket);
@@ -14,12 +28,15 @@ describe('TmuxManager', () => {
     try {
       await tmux.killSession(testSessionId);
     } catch {
+      // Ignore cleanup errors
     }
   });
 
   describe('session management', () => {
     it('checks session existence', async () => {
-      const exists = await tmux.sessionExists('non-existent-session');
+      // Use a valid UUID that doesn't exist
+      const nonExistentUUID = randomUUID();
+      const exists = await tmux.sessionExists(nonExistentUUID);
       expect(exists).toBe(false);
     });
 

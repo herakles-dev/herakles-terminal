@@ -1,0 +1,18 @@
+{
+  "name": "Zeus Terminal",
+  "short_name": "Terminal",
+  "description": "Mobile-first web terminal with Claude Code integration",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#00d4ff",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

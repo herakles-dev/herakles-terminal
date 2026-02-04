@@ -1,5 +1,6 @@
 import express from 'express';
 import { createServer } from 'http';
+import { writeFileSync, appendFileSync, readFileSync } from 'fs';
 import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,14 +18,21 @@ import { templateRoutes } from './api/templates.js';
 import { commandRoutes } from './api/commands.js';
 import { uploadRoutes } from './api/uploads.js';
 import { projectRoutes } from './api/projects.js';
+import { createMusicRoutes } from './music/musicRoutes.js';
+import { MusicPlayerStore } from './music/MusicPlayerStore.js';
 import { securityHeaders, corsMiddleware } from './middleware/security.js';
 import { autheliaAuth } from './middleware/autheliaAuth.js';
-import { httpRateLimiter } from './middleware/rateLimit.js';
+import { httpRateLimiter, handoffLimiter } from './middleware/rateLimit.js';
 import { csrfToken, csrfProtection } from './middleware/csrf.js';
 import { ipWhitelistMiddleware } from './middleware/ipWhitelist.js';
 import { logger, httpLogger, wsLogger } from './utils/logger.js';
 import { cleanupOldUploads } from './utils/cleanup.js';
 import { artifactWatcher } from './canvas/ArtifactWatcher.js';
+import './todo/TodoManager.js'; // Side-effect: initializes singleton and sets up event listeners
+import { todoFileWatcher } from './todo/TodoFileWatcher.js';
+import { contextManager } from './context/ContextManager.js';
+import { contextFileWatcher } from './context/ContextFileWatcher.js';
+import { migrateWindowAutoNames } from './migrations/migrateWindowAutoNames.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +41,7 @@ const app = express();
 const server = createServer(app);
 
 const store = new SessionStore(config.database.path);
+const musicStore = new MusicPlayerStore(store.getDatabase());
 const tmux = new TmuxManager(config.tmux.socket, config.tmux.configPath);
 const windowManager = new WindowManager(tmux, store);
 const deviceManager = new MultiDeviceManager(store);
@@ -96,6 +105,44 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// DEBUG: Minimap classification debug endpoint (no auth for debugging)
+app.post('/api/debug/minimap', (req, res) => {
+  const { lines, classifications } = req.body || {};
+  const debugPath = '/tmp/minimap-debug.txt';
+  const content = JSON.stringify({ lines, classifications, timestamp: new Date().toISOString() }, null, 2);
+  writeFileSync(debugPath, content);
+  logger.info(`[DEBUG] Minimap data written to ${debugPath}`);
+  res.json({ success: true, path: debugPath });
+});
+
+// DEBUG: Browser console loopback (no auth for debugging)
+app.post('/api/debug/console', (req, res) => {
+  const { level, message, data, component, timestamp } = req.body || {};
+  const logLine = `[${timestamp || new Date().toISOString()}] [${(level || 'log').toUpperCase()}] [${component || 'unknown'}] ${message} ${data ? JSON.stringify(data) : ''}`;
+  logger.info(`[BROWSER] ${logLine}`);
+  try {
+    appendFileSync('/tmp/browser-console.log', logLine + '\n');
+  } catch { /* ignore */ }
+  res.json({ success: true });
+});
+
+app.get('/api/debug/console', (_req, res) => {
+  try {
+    const logs = readFileSync('/tmp/browser-console.log', 'utf-8');
+    const lines = logs.split('\n').filter(Boolean).slice(-100);
+    res.json({ data: lines });
+  } catch {
+    res.json({ data: [] });
+  }
+});
+
+app.delete('/api/debug/console', (_req, res) => {
+  try {
+    writeFileSync('/tmp/browser-console.log', '');
+  } catch { /* ignore */ }
+  res.json({ success: true });
+});
+
 app.get('/api/metrics', (_req, res) => {
   const metrics = [
     `# HELP zeus_connections_total Total WebSocket connections`,
@@ -113,11 +160,18 @@ app.get('/api/csrf-token', autheliaAuth, csrfToken, (_req, res) => {
   res.json({ data: { token: res.locals.csrfToken } });
 });
 
+// Apply handoff-specific rate limiting to the automation run endpoint
+app.use('/api/automations/:id/run', handoffLimiter(store.getDatabase()));
+
 app.use('/api/automations', autheliaAuth, csrfToken, csrfProtection, automationRoutes(store, automationEngine, windowManager, connectionManager));
 app.use('/api/templates', autheliaAuth, csrfToken, csrfProtection, templateRoutes(store));
 app.use('/api/commands', autheliaAuth, csrfToken, csrfProtection, commandRoutes(store));
 app.use('/api/uploads', autheliaAuth, csrfToken, csrfProtection, uploadRoutes(store, connectionManager));
 app.use('/api/projects', autheliaAuth, projectRoutes());
+app.use('/api/music', autheliaAuth, csrfToken, csrfProtection, createMusicRoutes(musicStore));
+
+// Serve project thumbnails statically
+app.use('/thumbnails', express.static(path.join(__dirname, '../../public/thumbnails')));
 app.use('/api', autheliaAuth, csrfToken, csrfProtection, apiRoutes(store));
 
 if (config.nodeEnv === 'production') {
@@ -192,6 +246,25 @@ artifactWatcher.start().catch((err) => {
   logger.error('Failed to start artifact watcher:', err);
 });
 
+// Start watching ~/.claude/todos/ for Claude Code todo changes
+// TodoManager listens to 'allTodos' events internally via setupWatcherListener()
+todoFileWatcher.startGlobalWatch();
+
+logger.info('TodoManager initialized for Claude Code TodoWrite sync');
+
+// Start watching ~/.claude/projects/ for Claude Code context usage
+// ContextManager listens to 'contextUpdate' events internally via setupWatcherListener()
+contextManager.setDatabase(store.getDatabase());
+contextManager.setTmuxManager(tmux);
+contextFileWatcher.startWatch();
+
+logger.info('ContextManager initialized for Claude Code context tracking');
+
+// Run database migrations
+migrateWindowAutoNames(store.getDatabase(), tmux)
+  .then(() => logger.info('Database migrations completed'))
+  .catch((err) => logger.error('Database migration failed:', err));
+
 const cleanupInterval = setInterval(() => {
   store.cleanupExpiredTokens();
   store.cleanupInactiveSessions();
@@ -204,6 +277,8 @@ process.on('SIGTERM', () => {
   logger.warn('SIGTERM received, shutting down gracefully...');
   clearInterval(cleanupInterval);
   artifactWatcher.stop();
+  todoFileWatcher.stopAll();
+  contextFileWatcher.stopAll();
   connectionManager.closeAll();
   deviceManager.destroy();
   automationEngine.destroy();
@@ -218,6 +293,8 @@ process.on('SIGINT', () => {
   logger.warn('SIGINT received, shutting down gracefully...');
   clearInterval(cleanupInterval);
   artifactWatcher.stop();
+  todoFileWatcher.stopAll();
+  contextFileWatcher.stopAll();
   connectionManager.closeAll();
   deviceManager.destroy();
   automationEngine.destroy();

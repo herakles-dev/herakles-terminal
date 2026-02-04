@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import { writeFileSync } from 'fs';
 import { SessionStore } from '../session/SessionStore.js';
 import { AutheliaUser } from '../middleware/autheliaAuth.js';
 
@@ -307,6 +308,50 @@ export function apiRoutes(store: SessionStore): Router {
         sidePanelDefaultTab: prefs.side_panel_default_tab,
       },
     });
+  });
+
+  // Debug endpoint for minimap classification
+  router.post('/debug/minimap', (req: Request, res: Response) => {
+    const { lines, classifications } = req.body || {};
+    const debugPath = '/tmp/minimap-debug.txt';
+    const content = JSON.stringify({ lines, classifications, timestamp: new Date().toISOString() }, null, 2);
+    writeFileSync(debugPath, content);
+    console.log(`[DEBUG] Minimap data written to ${debugPath}`);
+    res.json({ success: true, path: debugPath });
+  });
+
+  // Browser console log loopback - receives frontend logs for debugging
+  router.post('/debug/console', (req: Request, res: Response) => {
+    const { level, message, data, component, timestamp } = req.body || {};
+    const logLine = `[${timestamp || new Date().toISOString()}] [${level?.toUpperCase() || 'LOG'}] [${component || 'unknown'}] ${message} ${data ? JSON.stringify(data) : ''}`;
+
+    // Write to console (server log)
+    console.log(`[BROWSER] ${logLine}`);
+
+    // Append to debug file
+    const fs = require('fs');
+    fs.appendFileSync('/tmp/browser-console.log', logLine + '\n');
+
+    res.json({ success: true });
+  });
+
+  // Get recent browser logs
+  router.get('/debug/console', (_req: Request, res: Response) => {
+    const fs = require('fs');
+    try {
+      const logs = fs.readFileSync('/tmp/browser-console.log', 'utf-8');
+      const lines = logs.split('\n').filter(Boolean).slice(-100); // Last 100 lines
+      res.json({ data: lines });
+    } catch {
+      res.json({ data: [] });
+    }
+  });
+
+  // Clear browser logs
+  router.delete('/debug/console', (_req: Request, res: Response) => {
+    const fs = require('fs');
+    fs.writeFileSync('/tmp/browser-console.log', '');
+    res.json({ success: true });
   });
 
   return router;

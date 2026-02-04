@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import type { Artifact, ArtifactType } from '../../types/canvas';
 import ArtifactRenderer from '../Canvas/ArtifactRenderer';
-import FullscreenViewer from '../Canvas/FullscreenViewer';
 
 interface CanvasPanelProps {
   artifacts: Artifact[];
@@ -13,6 +12,8 @@ interface CanvasPanelProps {
   onRemoveArtifact?: (id: string) => void;
   onToggleStar?: (id: string) => void;
   onSendToTerminal?: (content: string) => void;
+  isExpanded?: boolean;
+  onExpandPanel?: () => void;
 }
 
 const TYPE_ICONS: Record<ArtifactType, React.ReactNode> = {
@@ -63,10 +64,11 @@ export default function CanvasPanel({
   onRemoveArtifact,
   onToggleStar,
   onSendToTerminal,
+  isExpanded,
+  onExpandPanel,
 }: CanvasPanelProps) {
   const [filter, setFilter] = useState<ArtifactType | 'all'>('all');
   const [copied, setCopied] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredArtifact, setHoveredArtifact] = useState<Artifact | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const mouseLongPressRef = useRef<number | null>(null);
@@ -90,10 +92,6 @@ export default function CanvasPanel({
       });
     }
   }, [activeArtifact]);
-
-  const handleMouseEnter = useCallback((artifact: Artifact) => {
-    setHoveredArtifact(artifact);
-  }, []);
 
   const handleMouseLeave = useCallback(() => {
     setHoveredArtifact(null);
@@ -137,6 +135,13 @@ export default function CanvasPanel({
     }
     wasLongPressRef.current = false;
   }, [onSelectArtifact]);
+
+  const handleItemDoubleClick = useCallback((artifact: Artifact) => {
+    onSelectArtifact(artifact.id);
+    if (!isExpanded && onExpandPanel) {
+      onExpandPanel();
+    }
+  }, [onSelectArtifact, isExpanded, onExpandPanel]);
 
   const handleExport = useCallback(() => {
     if (activeArtifact) {
@@ -210,6 +215,7 @@ export default function CanvasPanel({
           <div
             key={artifact.id}
             onClick={() => handleItemClick(artifact.id)}
+            onDoubleClick={() => handleItemDoubleClick(artifact)}
             onMouseDown={() => handleMouseDown(artifact)}
             onMouseUp={handleMouseUp}
             onMouseLeave={() => { handleMouseLeave(); handleMouseUp(); }}
@@ -276,15 +282,17 @@ export default function CanvasPanel({
         {(hoveredArtifact || activeArtifact) ? (
           <>
             <ArtifactRenderer artifact={hoveredArtifact || activeArtifact!} viewMode={viewMode} />
-            <button
-              onClick={() => setIsFullscreen(true)}
-              className="absolute top-3 right-3 p-2 bg-[#18181b]/90 hover:bg-[#27272a] border border-[#27272a] rounded-lg text-[#71717a] hover:text-[#00d4ff] transition-all opacity-0 group-hover/preview:opacity-100"
-              title="View fullscreen"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                <path strokeLinecap="round" d="M4 8V4h4M4 16v4h4M16 4h4v4M16 20h4v-4" />
-              </svg>
-            </button>
+            {!isExpanded && onExpandPanel && (
+              <button
+                onClick={onExpandPanel}
+                className="absolute top-3 right-3 p-2 bg-[#18181b]/90 hover:bg-[#27272a] border border-[#27272a] rounded-lg text-[#71717a] hover:text-[#00d4ff] transition-all opacity-0 group-hover/preview:opacity-100"
+                title="Expand panel"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                  <path strokeLinecap="round" d="M4 8V4h4M4 16v4h4M16 4h4v4M16 20h4v-4" />
+                </svg>
+              </button>
+            )}
           </>
         ) : (
           <div className="h-full flex items-center justify-center text-[#8a8a92] text-base">
@@ -347,15 +355,6 @@ export default function CanvasPanel({
         </button>
       </div>
 
-      {isFullscreen && activeArtifact && (
-        <FullscreenViewer
-          artifact={activeArtifact}
-          viewMode={viewMode}
-          onClose={() => setIsFullscreen(false)}
-          onToggleViewMode={onToggleViewMode}
-          onSendToTerminal={onSendToTerminal}
-        />
-      )}
     </div>
   );
 }

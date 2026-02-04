@@ -275,12 +275,25 @@ export function useWebSocket({
       }
     };
 
+    // Browser window focus - triggers on clicking into ANY browser window
+    // (visibilitychange only fires on tab switches, not window focus)
+    const handleWindowFocus = () => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        if (urlRef.current && urlRef.current !== 'ws://localhost') {
+          attemptsRef.current = 0;
+          connect();
+        }
+      }
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('online', handleOnline);
+    window.addEventListener('focus', handleWindowFocus);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('focus', handleWindowFocus);
     };
   }, [connect]);
 

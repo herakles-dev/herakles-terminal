@@ -7,21 +7,25 @@ interface Preferences {
   timezone: string;
   quickKeyBarVisible: boolean;
   sidePanelDefaultTab: string;
+  showLightning: boolean;
 }
 
 interface SettingsPanelProps {
   onPreferencesChange?: (prefs: Preferences) => void;
+  showLightning?: boolean;
+  onLightningChange?: (enabled: boolean) => void;
 }
 
 const TIMEOUT_OPTIONS = [1, 6, 12, 24, 48, 72, 168, 336, 720];
 
-export default function SettingsPanel({ onPreferencesChange }: SettingsPanelProps) {
+export default function SettingsPanel({ onPreferencesChange, showLightning = true, onLightningChange }: SettingsPanelProps) {
   const [preferences, setPreferences] = useState<Preferences>({
     fontSize: 14,
     sessionTimeoutHours: 168,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     quickKeyBarVisible: true,
     sidePanelDefaultTab: 'commands',
+    showLightning: true,
   });
   const [localFontSize, setLocalFontSize] = useState(14);
   const [loading, setLoading] = useState(true);
@@ -140,7 +144,7 @@ export default function SettingsPanel({ onPreferencesChange }: SettingsPanelProp
               <option key={hours} value={hours}>{formatTimeout(hours)}</option>
             ))}
           </select>
-          <p className="mt-2 text-[12px] text-[#8a8a92]">Automatically close inactive sessions</p>
+          <p className="mt-2 text-[13px] text-[#8a8a92]">Automatically close inactive sessions</p>
         </div>
 
         <div className="bg-[#08080e] border border-[#00d4ff]/5 rounded-lg p-3">
@@ -161,7 +165,7 @@ export default function SettingsPanel({ onPreferencesChange }: SettingsPanelProp
         <div className="flex items-center justify-between bg-[#08080e] border border-[#00d4ff]/5 rounded-lg p-3">
           <div>
             <label className="text-[13px] font-semibold text-[#a0a0a8]">Quick Keys Bar</label>
-            <p className="text-[12px] text-[#8a8a92] mt-0.5">Show keyboard shortcuts</p>
+            <p className="text-[13px] text-[#8a8a92] mt-0.5">Show keyboard shortcuts</p>
           </div>
           <button
             onClick={() => savePreferences({ quickKeyBarVisible: !preferences.quickKeyBarVisible })}
@@ -172,6 +176,25 @@ export default function SettingsPanel({ onPreferencesChange }: SettingsPanelProp
             <span
               className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform duration-300 ${
                 preferences.quickKeyBarVisible ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between bg-[#08080e] border border-[#00d4ff]/5 rounded-lg p-3">
+          <div>
+            <label className="text-[13px] font-semibold text-[#a0a0a8]">Lightning Effect</label>
+            <p className="text-[13px] text-[#8a8a92] mt-0.5">Animated header accent</p>
+          </div>
+          <button
+            onClick={() => onLightningChange?.(!showLightning)}
+            className={`relative w-10 h-5 rounded-full transition-all duration-300 ${
+              showLightning ? 'bg-[#00d4ff] shadow-[0_0_10px_rgba(0,212,255,0.4)]' : 'bg-[#1a1a20]'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform duration-300 ${
+                showLightning ? 'translate-x-5' : 'translate-x-0'
               }`}
             />
           </button>

@@ -435,7 +435,8 @@ export class SessionStore {
 
   getSession(id: string, userEmail: string): SessionRecord | null {
     const stmt = this.db.prepare('SELECT * FROM sessions WHERE id = ? AND user_email = ?');
-    return stmt.get(id, userEmail) as SessionRecord | null;
+    const result = stmt.get(id, userEmail) as SessionRecord | undefined;
+    return result ?? null;
   }
 
   getSessionsByUser(userEmail: string): SessionRecord[] {

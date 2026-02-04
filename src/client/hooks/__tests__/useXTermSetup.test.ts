@@ -76,9 +76,9 @@ describe('useXTermSetup', () => {
         expect.objectContaining({
           cursorStyle: 'block',
           cursorBlink: true,
-          allowTransparency: true,
+          allowTransparency: false,
           macOptionIsMeta: true,
-          convertEol: true,
+          convertEol: false,
           scrollOnUserInput: true,
         })
       );

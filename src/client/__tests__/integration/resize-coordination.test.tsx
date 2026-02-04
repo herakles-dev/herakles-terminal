@@ -1,22 +1,23 @@
 import { act } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
+import { vi } from 'vitest';
 import { useResizeCoordinator } from '../../hooks/useResizeCoordinator';
 
 describe('Resize Coordination Integration', () => {
   beforeEach(() => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
-    jest.useRealTimers();
+    vi.useRealTimers();
   });
 
   it('should coordinate resize across multiple terminals', () => {
     const { result } = renderHook(() => useResizeCoordinator());
-    
-    const mockFitAddon1 = { fit: jest.fn(), proposeDimensions: jest.fn(() => ({ cols: 80, rows: 24 })) } as any;
-    const mockFitAddon2 = { fit: jest.fn(), proposeDimensions: jest.fn(() => ({ cols: 80, rows: 24 })) } as any;
-    const mockFitAddon3 = { fit: jest.fn(), proposeDimensions: jest.fn(() => ({ cols: 80, rows: 24 })) } as any;
+
+    const mockFitAddon1 = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const mockFitAddon2 = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const mockFitAddon3 = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
 
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon1 });
@@ -30,7 +31,7 @@ describe('Resize Coordination Integration', () => {
 
     act(() => {
       window.dispatchEvent(new Event('resize'));
-      jest.runAllTimers();
+      vi.runAllTimers();
     });
 
     expect(mockFitAddon1.fit).toHaveBeenCalled();
@@ -40,7 +41,7 @@ describe('Resize Coordination Integration', () => {
 
   it('should handle resize during output (EC-R-02)', () => {
     const { result } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: jest.fn(), proposeDimensions: jest.fn(() => ({ cols: 80, rows: 24 })) } as any;
+    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
 
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
@@ -50,7 +51,7 @@ describe('Resize Coordination Integration', () => {
       result.current.triggerResize();
       result.current.triggerResize();
       result.current.triggerResize();
-      jest.runAllTimers();
+      vi.runAllTimers();
     });
 
     expect(mockFitAddon.fit).toHaveBeenCalled();
@@ -58,8 +59,8 @@ describe('Resize Coordination Integration', () => {
 
   it('should handle side panel toggle (EC-R-06)', () => {
     const { result } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: jest.fn(), proposeDimensions: jest.fn(() => ({ cols: 80, rows: 24 })) } as any;
-    const onResize = jest.fn();
+    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const onResize = vi.fn();
 
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon, onResize });
@@ -69,7 +70,7 @@ describe('Resize Coordination Integration', () => {
 
     act(() => {
       result.current.triggerResize();
-      jest.runAllTimers();
+      vi.runAllTimers();
     });
 
     expect(mockFitAddon.fit).toHaveBeenCalled();
@@ -78,7 +79,7 @@ describe('Resize Coordination Integration', () => {
 
   it('should properly cleanup on unmount', () => {
     const { result, unmount } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: jest.fn(), proposeDimensions: jest.fn(() => ({ cols: 80, rows: 24 })) } as any;
+    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
 
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
@@ -93,25 +94,37 @@ describe('Resize Coordination Integration', () => {
     expect(finalStats.registeredCount).toBe(1);
   });
 
-  it('should not trigger server resize while dragging', () => {
+  it('should debounce server resize (100ms debounce)', () => {
     const { result } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: jest.fn(), proposeDimensions: jest.fn(() => ({ cols: 80, rows: 24 })) } as any;
-    const onResize = jest.fn();
+    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const onResize = vi.fn();
 
+    // Register triggers immediate resize via RAF
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon, onResize });
+      vi.runAllTimers(); // Flush the initial RAF
     });
 
+    // Clear the mock after initial registration resize
+    onResize.mockClear();
+
+    // Trigger resize events
     act(() => {
       result.current.triggerResize();
       result.current.triggerResize();
-      jest.advanceTimersByTime(100);
+    });
+
+    // Before debounce completes (50ms < 100ms) - not called yet
+    act(() => {
+      vi.advanceTimersByTime(50);
     });
 
     expect(onResize).not.toHaveBeenCalled();
 
+    // After debounce completes (another 50ms = 100ms total) - called once
     act(() => {
-      jest.advanceTimersByTime(50);
+      vi.advanceTimersByTime(50);
+      vi.runAllTimers(); // Flush the RAF inside the debounce callback
     });
 
     expect(onResize).toHaveBeenCalledTimes(1);

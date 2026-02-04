@@ -57,7 +57,7 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
   
-  --window-header-height: 36px;
+  --window-header-height: 28px;
   --minimap-width: 130px;
   --keyboard-height: 0px;
   --viewport-height: 100dvh;
@@ -66,6 +66,9 @@
   --transition-fast: 0.15s ease;
   --transition-normal: 0.2s ease;
   --transition-smooth: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
 }
 
 @supports not (height: 100dvh) {
@@ -88,7 +91,7 @@ html, body, #root {
 }
 
 body {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: var(--font-ui);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
@@ -955,13 +958,37 @@ select:focus-visible {
 }
 
 @keyframes file-drop-zone-pulse {
-  0%, 100% { 
+  0%, 100% {
     border-color: rgba(0, 212, 255, 0.5);
     box-shadow: inset 0 0 30px rgba(0, 212, 255, 0.1);
   }
-  50% { 
+  50% {
     border-color: rgba(0, 212, 255, 0.8);
     box-shadow: inset 0 0 50px rgba(0, 212, 255, 0.2);
+  }
+}
+
+/* Context Indicator styles */
+.context-glow-orange {
+  filter: drop-shadow(0 0 4px rgba(249, 115, 22, 0.5));
+}
+
+.context-glow-red {
+  filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.6));
+}
+
+.context-pulse {
+  animation: context-pulse-animation 1.5s ease-in-out infinite;
+}
+
+@keyframes context-pulse-animation {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.85;
   }
 }
 

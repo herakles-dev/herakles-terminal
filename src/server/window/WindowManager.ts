@@ -33,6 +33,36 @@ export class WindowManager {
     this.store = store;
   }
 
+  /**
+   * Extract project name from a working directory path.
+   * Returns the directory name for paths under /home/hercules/, null otherwise.
+   *
+   * Examples:
+   *   /home/hercules/herakles-terminal → "herakles-terminal"
+   *   /home/hercules/project/subdir → "project"
+   *   /home/hercules → null
+   *   ~ → null
+   *   /tmp → null
+   */
+  private extractProjectName(cwd: string | null): string | null {
+    if (!cwd) return null;
+
+    // Normalize home directory shorthand
+    const normalizedPath = cwd.replace(/^~/, '/home/hercules');
+
+    // Only extract project name from paths under /home/hercules/
+    if (!normalizedPath.startsWith('/home/hercules/')) {
+      return null;
+    }
+
+    // Remove /home/hercules/ prefix
+    const relativePath = normalizedPath.substring('/home/hercules/'.length);
+
+    // Extract the first directory component (project name)
+    const parts = relativePath.split('/').filter(Boolean);
+    return parts.length > 0 ? parts[0] : null;
+  }
+
   async createWindow(
     sessionId: string,
     userEmail: string,
@@ -40,11 +70,13 @@ export class WindowManager {
     cols = 80,
     rows = 24
   ): Promise<WindowInfo> {
+    // [FIX-1] Validate session exists before any state changes
     const session = this.store.getSession(sessionId, userEmail);
     if (!session) {
       throw new Error('Session not found or access denied');
     }
 
+    // [FIX-1] Validate window limit before creating tmux session
     const existingWindows = this.store.getWindows(sessionId, userEmail);
     if (existingWindows.length >= config.session.maxWindowsPerSession) {
       throw new Error(`Maximum ${config.session.maxWindowsPerSession} windows per session`);
@@ -52,27 +84,70 @@ export class WindowManager {
 
     const isMain = typeof isMainOrName === 'boolean' ? isMainOrName : false;
     const customName = typeof isMainOrName === 'string' ? isMainOrName : null;
-
     const windowId = uuidv4();
     const layout = this.calculateNewWindowLayout(existingWindows);
     const zIndex = existingWindows.length;
 
-    await this.tmux.createSession(windowId, cols, rows);
+    // [FIX-2] Create tmux session with error handling
+    let tmuxCreated = false;
+    try {
+      console.log(`[WindowManager] Creating tmux session ${windowId} (${cols}x${rows})`);
+      await this.tmux.createSession(windowId, cols, rows);
+      tmuxCreated = true;
+      console.log(`[WindowManager] Tmux session created successfully`);
+    } catch (tmuxError) {
+      // [FIX-2] If tmux creation fails, throw immediately - don't create database record
+      console.error(`[WindowManager] Tmux creation failed for ${windowId}:`, tmuxError);
+      throw new Error(`Failed to create tmux session: ${(tmuxError as Error).message}`);
+    }
 
-    const windowRecord = this.store.createWindow({
-      id: windowId,
-      session_id: sessionId,
-      name: customName || (isMain ? 'Main' : `Window ${existingWindows.length + 1}`),
-      auto_name: null,
-      position_x: layout.x,
-      position_y: layout.y,
-      width: layout.width,
-      height: layout.height,
-      z_index: zIndex,
-      is_main: isMain ? 1 : 0,
-    });
+    // [FIX-2] Get working directory AFTER tmux creation succeeds
+    let cwd: string | null = null;
+    let projectName: string | null = null;
+    try {
+      cwd = await this.tmux.getCurrentWorkingDirectory(windowId);
+      projectName = this.extractProjectName(cwd);
+      console.log(`[WindowManager] CWD: ${cwd}, Project: ${projectName}`);
+    } catch (cwdError) {
+      // Not fatal - continue with null projectName
+      console.warn(`[WindowManager] Failed to get CWD for ${windowId}:`, cwdError);
+    }
 
-    return this.recordToInfo(windowRecord);
+    // [FIX-3] Create database record ONLY after tmux is fully ready
+    // [FIX-3] Wrap in try-catch to ensure we can roll back if DB write fails
+    let windowRecord;
+    try {
+      console.log(`[WindowManager] Creating window record in database`);
+      windowRecord = this.store.createWindow({
+        id: windowId,
+        session_id: sessionId,
+        name: customName || (isMain ? 'Main' : `Window ${existingWindows.length + 1}`),
+        auto_name: projectName,
+        position_x: layout.x,
+        position_y: layout.y,
+        width: layout.width,
+        height: layout.height,
+        z_index: zIndex,
+        is_main: isMain ? 1 : 0,
+      });
+      console.log(`[WindowManager] Window record created: ${windowId}`);
+    } catch (dbError) {
+      // [FIX-3] If database write fails, kill tmux session to rollback
+      console.error(`[WindowManager] Database write failed for ${windowId}, rolling back tmux:`, dbError);
+      try {
+        if (tmuxCreated) {
+          await this.tmux.killSession(windowId);
+          console.log(`[WindowManager] Rolled back tmux session ${windowId}`);
+        }
+      } catch (rollbackError) {
+        console.error(`[WindowManager] Rollback failed:`, rollbackError);
+      }
+      throw new Error(`Failed to create window record: ${(dbError as Error).message}`);
+    }
+
+    const windowInfo = this.recordToInfo(windowRecord);
+    console.log(`[WindowManager] Window creation complete: ${windowId}`);
+    return windowInfo;
   }
 
   async getWindow(windowId: string, userEmail: string): Promise<WindowInfo | null> {
@@ -141,19 +216,16 @@ export class WindowManager {
   }
 
   async sendToWindow(windowId: string, content: string, userEmail: string): Promise<void> {
-    console.log(`[WindowManager] sendToWindow ${windowId}, content length: ${content.length}`);
+    // Reduced logging verbosity - only log errors
     const pty = this.activePtys.get(windowId);
     if (!pty) {
-      console.log(`[WindowManager] No active PTY for ${windowId}, attaching...`);
       const window = await this.getWindow(windowId, userEmail);
       if (!window) {
         throw new Error('Window not found or access denied');
       }
       const newPty = await this.attachToWindow(windowId, userEmail);
-      console.log(`[WindowManager] Attached, writing to PTY`);
       newPty.write(content);
     } else {
-      console.log(`[WindowManager] Writing to existing PTY`);
       pty.write(content);
     }
   }
@@ -255,17 +327,27 @@ export class WindowManager {
     return this.activePtys.size;
   }
 
+  /**
+   * Capture screen content with optional health-aware adaptive scrollback.
+   *
+   * @param windowId - Window UUID
+   * @param userEmail - User email for authorization
+   * @param cols - Optional columns for pre-capture resize
+   * @param rows - Optional rows for pre-capture resize
+   * @param healthScore - Optional WebGL health score (0-100) for adaptive scrollback
+   */
   async captureScreen(
-    windowId: string, 
+    windowId: string,
     userEmail: string,
     cols?: number,
-    rows?: number
+    rows?: number,
+    healthScore?: number
   ): Promise<string> {
     const window = await this.getWindow(windowId, userEmail);
     if (!window) {
       return '';
     }
-    
+
     if (cols && rows && cols > 0 && rows > 0) {
       try {
         await this.tmux.resizeSession(windowId, cols, rows);
@@ -274,7 +356,7 @@ export class WindowManager {
         console.warn(`[WindowManager] Pre-capture resize failed for ${windowId}:`, error);
       }
     }
-    
-    return this.tmux.capturePane(windowId, false);
+
+    return this.tmux.capturePane(windowId, { visibleOnly: false, healthScore });
   }
 }

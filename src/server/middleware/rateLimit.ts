@@ -112,7 +112,7 @@ export function createRateLimiter(db: Database.Database, config: RateLimitConfig
 
 export function httpRateLimiter(db: Database.Database) {
   return createRateLimiter(db, {
-    limit: 100,
+    limit: 10000, // Increased from 100 to 10000 for development (never block)
     windowMs: 60 * 1000,
     keyGenerator: (req) => `http:${req.headers['remote-user'] || req.ip}`,
   });
@@ -160,6 +160,15 @@ export class WebSocketRateLimiter {
   }
 }
 
+export function handoffLimiter(db: Database.Database) {
+  return createRateLimiter(db, {
+    limit: 5,
+    windowMs: 60 * 1000,  // 1 minute
+    keyGenerator: (req) => `handoff:${req.headers['remote-user'] || req.ip}`,
+    lockoutMinutes: 5  // 5 minute lockout after exceeding limit
+  });
+}
+
 export function checkAuthLockout(db: Database.Database, key: string): boolean {
   const limiter = new RateLimiter(db);
   return limiter.isLockedOut(`auth:${key}`);
@@ -168,7 +177,7 @@ export function checkAuthLockout(db: Database.Database, key: string): boolean {
 export function recordAuthFailure(db: Database.Database, key: string): void {
   const limiter = new RateLimiter(db);
   const result = limiter.check(`auth:${key}`, 5, 60 * 1000);
-  
+
   if (!result.allowed) {
     limiter.lockout(`auth:${key}`, 15);
   }

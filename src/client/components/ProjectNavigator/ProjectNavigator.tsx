@@ -49,28 +49,30 @@ function ProjectTypeIcon({ project }: { project: ProjectInfo }) {
   );
 }
 
-function ProjectCard({ 
-  project, 
-  onSelect, 
-  onToggleFavorite 
-}: { 
-  project: ProjectInfo; 
+function ProjectCard({
+  project,
+  onSelect,
+  onToggleFavorite
+}: {
+  project: ProjectInfo;
   onSelect: (path: string) => void;
   onToggleFavorite: (id: string) => void;
 }) {
+  const [imgError, setImgError] = useState(false);
+
   return (
     <button
       onClick={() => onSelect(project.path)}
-      className="group relative flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] hover:border-[#00d4ff]/30 rounded-lg transition-all duration-150 h-[88px] min-w-[140px]"
+      className="group relative flex flex-col items-center justify-center p-3 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] hover:border-[#00d4ff]/30 rounded-lg transition-all duration-150 h-[100px] min-w-[140px]"
     >
       <button
         onClick={(e) => {
           e.stopPropagation();
           onToggleFavorite(project.id);
         }}
-        className={`absolute top-1.5 right-1.5 p-0.5 rounded transition-all ${
-          project.isFavorite 
-            ? 'text-[#eab308] opacity-100' 
+        className={`absolute top-1.5 right-1.5 p-0.5 rounded transition-all z-10 ${
+          project.isFavorite
+            ? 'text-[#eab308] opacity-100'
             : 'text-[#8a8a92] opacity-0 group-hover:opacity-100'
         }`}
       >
@@ -80,19 +82,28 @@ function ProjectCard({
       </button>
 
       {project.status === 'running' && (
-        <div className="absolute top-1.5 left-1.5 w-2 h-2 bg-[#22c55e] rounded-full shadow-[0_0_6px_rgba(34,197,94,0.5)]" />
+        <div className="absolute top-1.5 left-1.5 w-2 h-2 bg-[#22c55e] rounded-full shadow-[0_0_6px_rgba(34,197,94,0.5)] z-10" />
       )}
 
-      <div className="mb-1.5">
-        <ProjectTypeIcon project={project} />
+      <div className="mb-1.5 w-10 h-10 flex items-center justify-center overflow-hidden rounded">
+        {project.thumbnail && !imgError ? (
+          <img
+            src={project.thumbnail}
+            alt={project.name}
+            className="w-full h-full object-cover rounded"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <ProjectTypeIcon project={project} />
+        )}
       </div>
 
-      <span className="text-[13px] text-[#d4d4d8] group-hover:text-white truncate w-full text-center font-medium leading-tight">
+      <span className="text-[12px] text-[#d4d4d8] group-hover:text-white truncate w-full text-center font-medium leading-tight">
         {project.name}
       </span>
-      
+
       {project.category && (
-        <span className="text-[11px] text-[#8a8a92] truncate w-full text-center mt-0.5">
+        <span className="text-[10px] text-[#8a8a92] truncate w-full text-center mt-0.5">
           {project.category}
         </span>
       )}

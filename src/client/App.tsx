@@ -26,6 +26,7 @@ import { TodoPanel } from './components/TodoPanel';
 import { MusicPlayer } from './components/MusicPlayer';
 import type { SessionTodos } from '@shared/todoProtocol';
 import type { MusicPlayerState } from '@shared/musicProtocol';
+import type { ContextUsage, ContextSyncMessage, ContextUpdateMessage } from '@shared/contextProtocol';
 
 import { useWebSocket, ConnectionState } from './hooks/useWebSocket';
 import { useKeyboardHeight } from './hooks/useKeyboardHeight';
@@ -33,6 +34,7 @@ import { useMobileDetect } from './hooks/useMobileDetect';
 import { useResizeCoordinator } from './hooks/useResizeCoordinator';
 import { useCanvasArtifacts } from './hooks/useCanvasArtifacts';
 import { useClipboardUpload } from './hooks/useClipboardUpload';
+import { useHealthActions } from './hooks/useHealthActions';
 import { useToast } from './components/Toast/Toast';
 import { uploadService } from './services/uploadService';
 import { OutputPipelineManager } from './services/OutputPipelineManager';
@@ -211,8 +213,24 @@ export default function App() {
   const [todoPanelExpanded, setTodoPanelExpanded] = useState(true);
   const [todoSessions, setTodoSessions] = useState<SessionTodos[]>([]);
   const [todosLoading, setTodosLoading] = useState(false);
+
+  // Compute todo count for window title badge
+  const todoCount = useMemo(() => {
+    let count = 0;
+    for (const session of todoSessions) {
+      for (const todo of session.todos) {
+        if (todo.status !== 'completed') count++;
+      }
+    }
+    return count;
+  }, [todoSessions]);
+
+  const todoHasActive = useMemo(() => {
+    return todoSessions.some(s => s.todos.some(t => t.status === 'in_progress'));
+  }, [todoSessions]);
   const [musicPlayerVisible, setMusicPlayerVisible] = useState(false);
   const [musicPlayerState, setMusicPlayerState] = useState<Partial<MusicPlayerState>>({});
+  const [contextUsage, setContextUsage] = useState<Map<string, ContextUsage>>(new Map());
   const csrfTokenRef = useRef<string | null>(null);
 
   // Memoized callback to prevent infinite render loop - must NOT change reference
@@ -498,6 +516,9 @@ export default function App() {
               // Step 3: Exit restore mode in write callback
               outputPipelineRef.current?.setRestoreInProgress(msg.windowId, false);
 
+              // Clear pending restore ref immediately to prevent accumulation
+              pendingRestoreRef.current.delete(msg.windowId);
+
               // FIX WG-2: Don't clear restore flag here - WebGL context loss can happen AFTER write completes
               // Flag will be cleared in handleRecoveryEnd after re-request is sent
               // This prevents blank terminal when context loss occurs during/after restore
@@ -587,6 +608,21 @@ export default function App() {
         setTodosLoading(false);
         break;
 
+      case 'context:sync':
+      case 'context:update': {
+        const contextMsg = msg as ContextSyncMessage | ContextUpdateMessage;
+        setContextUsage(prev => {
+          const newMap = new Map(prev);
+          if (contextMsg.usage) {
+            newMap.set(contextMsg.windowId, contextMsg.usage);
+          } else {
+            newMap.delete(contextMsg.windowId);
+          }
+          return newMap;
+        });
+        break;
+      }
+
       case 'error':
         console.error('WebSocket error:', msg.message);
         break;
@@ -664,6 +700,14 @@ export default function App() {
     }
   }, [connectionState]);
 
+  // Create health actions hook for proactive health management
+  const { applyHealthActions } = useHealthActions({
+    healthMonitor: healthMonitorRef.current,
+    terminalRefs: terminalRefs.current,
+    outputPipeline: outputPipelineRef.current,
+    toast,
+  });
+
   useEffect(() => {
     const writeToTerminal = (windowId: string, data: string) => {
       const handle = terminalRefs.current.get(windowId);
@@ -677,16 +721,13 @@ export default function App() {
 
     // Create health monitor with metrics callback
     const healthMonitor = new WebGLHealthMonitor((metrics) => {
-      // Log metrics to console for Phase 1 analysis
+      // Apply proactive health actions (Phase 2: Complete)
+      applyHealthActions(metrics);
+
+      // Log metrics to console for debugging
       if (metrics.recommendation !== 'normal') {
         console.warn('[WebGLHealth] Recommendation:', metrics.recommendation, 'Score:', metrics.healthScore);
       }
-
-      // TODO Phase 3: Implement proactive actions based on recommendation
-      // - 'light_throttle': Already handled by OutputPipelineManager
-      // - 'reduce_quality': Reduce scrollback, increase throttling
-      // - 'warn_user': Show toast notification
-      // - 'reinit_required': Trigger WebGL reinitialization
     });
     healthMonitorRef.current = healthMonitor;
 
@@ -707,7 +748,7 @@ export default function App() {
       outputPipelineRef.current?.clearAll();
       outputPipelineRef.current = null;
     };
-  }, []);
+  }, [applyHealthActions]);
 
   const sendMessage = useCallback((message: object) => {
     sendMessageRef.current?.(message);
@@ -829,12 +870,15 @@ export default function App() {
     };
 
     const handleTerminalReady = (term: XTerm, _fitAddon: FitAddon) => {
-      sendMessage({ 
-        type: 'window:subscribe', 
+      sendMessage({
+        type: 'window:subscribe',
         windowId,
         cols: term.cols,
         rows: term.rows,
       });
+
+      // Subscribe to context usage updates for this window
+      sendMessage({ type: 'context:subscribe', windowId });
 
       term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
         const isCtrlOrCmd = event.ctrlKey || event.metaKey;
@@ -1367,6 +1411,9 @@ export default function App() {
           sidePanelOpen={sidePanelOpen}
           minimapVisible={minimapVisible}
           leftOffset={todoPanelExpanded ? 280 : 48}
+          contextUsage={contextUsage}
+          todoCount={todoCount}
+          todoHasActive={todoHasActive}
         />
         <SidePanel
           isOpen={sidePanelOpen}

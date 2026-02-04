@@ -168,7 +168,7 @@ export function useCanvasArtifacts() {
     setState(prev => {
       const artifact = prev.artifacts.find(a => a.id === id);
       if (artifact?.starred) {
-        unstarArtifactApi(id);
+        unstarArtifactApi(id, csrfTokenRef.current);
       }
       
       const newArtifacts = prev.artifacts.filter(a => a.id !== id);

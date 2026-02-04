@@ -55,7 +55,7 @@ describe('useTerminalCore', () => {
 
     it('should handle dispose errors gracefully', () => {
       const { result, unmount } = renderHook(() => useTerminalCore());
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation();
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       
       mockTerminal.dispose = vi.fn(() => {
         throw new Error('Dispose failed');

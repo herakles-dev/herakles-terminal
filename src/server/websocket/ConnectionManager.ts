@@ -11,6 +11,9 @@ import { WebSocketRateLimiter } from '../middleware/rateLimit.js';
 import { config } from '../config.js';
 import { validateClientMessage, ValidatedClientMessage } from './messageSchema.js';
 import type { ServerMessage } from '../../shared/types.js';
+import { todoManager } from '../todo/TodoManager.js';
+import { todoFileWatcher } from '../todo/TodoFileWatcher.js';
+import { contextManager } from '../context/ContextManager.js';
 
 interface Connection {
   id: string;
@@ -23,6 +26,12 @@ interface Connection {
   userAgent: string;
   authenticated: boolean;
   lastPing: number;
+  healthScore?: number;  // WebGL health score (0-100) for adaptive capture
+}
+
+interface WindowListenerState {
+  registered: boolean;
+  listenerCount: number;
 }
 
 interface ConnectionMeta {
@@ -40,8 +49,10 @@ export class ConnectionManager {
   private auditLogger: AuditLogger;
   private rateLimiter: WebSocketRateLimiter;
   private heartbeatInterval: NodeJS.Timeout | null = null;
-  private windowOutputListeners: Set<string> = new Set();
+  private windowListenerStates: Map<string, WindowListenerState> = new Map();
   private commandBuffers: Map<string, string> = new Map();
+  private windowSubscribeTimers: Map<string, NodeJS.Timeout> = new Map();
+  private cronsInitializedForUsers: Set<string> = new Set();
 
   constructor(
     store: SessionStore,
@@ -64,15 +75,38 @@ export class ConnectionManager {
 
   private setupAutomationCallbacks(): void {
     this.automationEngine.onWindowCreated(async (sessionId, windowId, userEmail) => {
-      const window = await this.windowManager.getWindow(windowId, userEmail);
-      if (window) {
+      try {
+        console.log(`[ConnectionManager] onWindowCreated callback: windowId=${windowId}, sessionId=${sessionId}`);
+
+        // [FIX-4] Verify window exists in database before setting up subscriptions
+        const window = await this.windowManager.getWindow(windowId, userEmail);
+        if (!window) {
+          console.error(`[ConnectionManager] Window not found after creation: ${windowId}`);
+          return;
+        }
+
+        console.log(`[ConnectionManager] Window found: ${window.id}, setting up subscriptions`);
+
+        // [FIX-4] Set up subscriptions for all connected clients in this session
+        let subscriptionCount = 0;
         for (const connection of this.connections.values()) {
           if (connection.sessionId === sessionId) {
-            connection.windowSubscriptions.add(windowId);
-            await this.setupWindowOutput(connection, windowId);
+            try {
+              connection.windowSubscriptions.add(windowId);
+              // This captures window content and sets up PTY listening
+              await this.setupWindowOutput(connection, windowId);
+              subscriptionCount++;
+              console.log(`[ConnectionManager] Setup output for connection ${connection.id}`);
+            } catch (setupError) {
+              console.error(`[ConnectionManager] Failed to setup output for connection ${connection.id}:`, setupError);
+              // Continue with other connections - don't fail the entire callback
+            }
           }
         }
-        
+
+        console.log(`[ConnectionManager] Broadcast window:created to session ${sessionId} (${subscriptionCount} connections)`);
+
+        // [FIX-4] Broadcast window creation to all clients in session
         this.broadcastToSession(sessionId, {
           type: 'window:created',
           window: {
@@ -89,6 +123,11 @@ export class ConnectionManager {
             createdAt: window.createdAt,
           },
         });
+
+        console.log(`[ConnectionManager] Window creation callback completed for ${windowId}`);
+      } catch (error) {
+        console.error(`[ConnectionManager] Unexpected error in onWindowCreated callback:`, error);
+        // Swallow error - don't throw from callbacks as this could crash automation
       }
     });
   }
@@ -237,7 +276,7 @@ export class ConnectionManager {
     });
   }
 
-  private handleMessage(connectionId: string, message: ValidatedClientMessage): void {
+  private async handleMessage(connectionId: string, message: ValidatedClientMessage): Promise<void> {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
 
@@ -301,12 +340,54 @@ export class ConnectionManager {
       case 'pong':
         connection.lastPing = Date.now();
         break;
+
+      case 'todo:subscribe':
+        this.handleTodoSubscribe(connection, (message as any).windowId);
+        break;
+
+      case 'todo:unsubscribe':
+        this.handleTodoUnsubscribe(connection, (message as any).windowId);
+        break;
+
+      case 'context:subscribe':
+        await this.handleContextSubscribe(connection, (message as any).windowId, (message as any).projectPath);
+        break;
+
+      case 'context:unsubscribe':
+        this.handleContextUnsubscribe(connection, (message as any).windowId);
+        break;
     }
+  }
+
+  private handleTodoSubscribe(connection: Connection, windowId: string): void {
+    if (!windowId) return;
+    todoManager.subscribe(windowId, connection.ws);
+    todoFileWatcher.subscribeWindow(windowId);
+  }
+
+  private handleTodoUnsubscribe(connection: Connection, windowId: string): void {
+    if (!windowId) return;
+    todoManager.unsubscribe(connection.ws);
+    todoFileWatcher.unsubscribeWindow(windowId);
+  }
+
+  private async handleContextSubscribe(connection: Connection, windowId: string, projectPath?: string): Promise<void> {
+    if (!windowId) return;
+    console.log(`[ConnectionManager] Context subscribe for window ${windowId}`, {
+      providedPath: projectPath,
+      user: connection.user.email,
+    });
+    await contextManager.subscribe(windowId, projectPath || null, connection.ws);
+  }
+
+  private handleContextUnsubscribe(_connection: Connection, windowId: string): void {
+    if (!windowId) return;
+    contextManager.unsubscribe(windowId);
   }
 
   private async handleSessionResume(connection: Connection, sessionId: string): Promise<void> {
     const session = this.store.getSession(sessionId, connection.user.email);
-    
+
     if (!session) {
       this.send(connection.ws, {
         type: 'error',
@@ -317,10 +398,16 @@ export class ConnectionManager {
     }
 
     connection.sessionId = sessionId;
-    
+
     if (session.state === 'dormant') {
       this.store.updateState(sessionId, 'active');
       await this.automationEngine.onResume(sessionId, connection.user.email);
+    }
+
+    // Initialize cron jobs only once per user (not once per connection resume)
+    if (!this.cronsInitializedForUsers.has(connection.user.email)) {
+      this.automationEngine.initializeCronJobs(connection.user.email);
+      this.cronsInitializedForUsers.add(connection.user.email);
     }
 
     this.store.updateActivity(sessionId);
@@ -516,6 +603,9 @@ export class ConnectionManager {
       await this.windowManager.closeWindow(windowId, connection.user.email);
       connection.windowSubscriptions.delete(windowId);
 
+      // Clean up listener state when window closes
+      this.windowListenerStates.delete(windowId);
+
       this.auditLogger.logWindowClose({
         windowId,
         sessionId: window.sessionId,
@@ -581,6 +671,12 @@ export class ConnectionManager {
     }
   }
 
+  /**
+   * Handle window subscription with debouncing to prevent redundant captures during rapid resizes.
+   *
+   * Uses a 300ms debounce window to batch rapid resize events (e.g., window drag)
+   * into a single capture operation, reducing memory spikes.
+   */
   private async handleWindowSubscribe(
     connection: Connection,
     windowId: string,
@@ -588,22 +684,117 @@ export class ConnectionManager {
     rows?: number
   ): Promise<void> {
     if (!windowId) return;
-    connection.windowSubscriptions.add(windowId);
-    await this.setupWindowOutput(connection, windowId, cols, rows);
+
+    // Debounce key combines connection ID and window ID
+    const timerKey = `${connection.id}:${windowId}`;
+    const existingTimer = this.windowSubscribeTimers.get(timerKey);
+
+    // Clear any pending subscription for this connection+window
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    // Wait 300ms for rapid resize events to settle
+    const timer = setTimeout(async () => {
+      this.windowSubscribeTimers.delete(timerKey);
+
+      // IMPORTANT: Setup output BEFORE adding to subscriptions
+      // This ensures window:restore is sent before any window:output messages
+      // can arrive from other connections' PTY listeners
+      await this.setupWindowOutput(connection, windowId, cols, rows);
+      connection.windowSubscriptions.add(windowId);
+    }, 300);
+
+    this.windowSubscribeTimers.set(timerKey, timer);
   }
 
   private handleWindowRename(connection: Connection, windowId: string, name: string): void {
     if (!windowId || !name || !connection.sessionId) return;
-    
+
     const db = this.store.getDatabase();
     db.prepare('UPDATE windows SET name = ? WHERE id = ? AND session_id = ?')
       .run(name, windowId, connection.sessionId);
-    
+
     this.broadcastToSession(connection.sessionId, {
       type: 'window:renamed',
       windowId,
       name,
     });
+  }
+
+  /**
+   * Auto-rename window based on directory changes (cd command detection).
+   * Extracts the first directory after /home/hercules/ as the window name.
+   */
+  private handleWindowAutoRename(sessionId: string, windowId: string, path: string): void {
+    const projectName = this.extractProjectName(path);
+    if (!projectName) return;
+
+    const db = this.store.getDatabase();
+    db.prepare('UPDATE windows SET auto_name = ? WHERE id = ? AND session_id = ?')
+      .run(projectName, windowId, sessionId);
+
+    this.broadcastToSession(sessionId, {
+      type: 'window:renamed',
+      windowId,
+      name: '',
+      autoName: projectName,
+    });
+  }
+
+  /**
+   * Extract project name from a path.
+   * Returns the first directory after /home/hercules/.
+   * Examples:
+   *   /home/hercules/my-project/src → "my-project"
+   *   ~/my-project → "my-project"
+   *   /home/hercules → "~" (home)
+   *   /tmp/something → null (outside hercules home)
+   */
+  private extractProjectName(rawPath: string): string | null {
+    // Normalize path: expand ~ to /home/hercules
+    let path = rawPath.trim().replace(/^~/, '/home/hercules');
+
+    // Remove quotes if present
+    path = path.replace(/^["']|["']$/g, '');
+
+    // Must be under /home/hercules/
+    if (!path.startsWith('/home/hercules')) {
+      return null;
+    }
+
+    // Remove the base path
+    const relativePath = path.slice('/home/hercules'.length);
+
+    // Home directory itself
+    if (!relativePath || relativePath === '/') {
+      return '~';
+    }
+
+    // Extract first directory component
+    const parts = relativePath.split('/').filter(Boolean);
+    if (parts.length === 0) {
+      return '~';
+    }
+
+    return parts[0];
+  }
+
+  /**
+   * Detect cd command and extract target path.
+   * Returns the path if it's a cd command, null otherwise.
+   */
+  private detectCdCommand(command: string): string | null {
+    // Match: cd <path> with optional trailing commands
+    // Handles: cd /path, cd ~/path, cd "path with spaces", cd 'path'
+    const match = command.match(/^\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|#]+)/);
+    if (!match) return null;
+
+    let path = match[1];
+    // Remove surrounding quotes
+    path = path.replace(/^["']|["']$/g, '');
+
+    return path || null;
   }
 
   private async handleInput(connection: Connection, windowId: string, data: string): Promise<void> {
@@ -644,6 +835,12 @@ export class ConnectionManager {
               window_id: windowId,
               command,
             });
+
+            // Auto-rename window on cd command
+            const cdPath = this.detectCdCommand(command);
+            if (cdPath && connection.sessionId) {
+              this.handleWindowAutoRename(connection.sessionId, windowId, cdPath);
+            }
           }
           currentBuffer = '';
         } else if (char === '\x7f' || char === '\b') {
@@ -670,25 +867,26 @@ export class ConnectionManager {
     rows?: number
   ): Promise<void> {
     try {
-      const pty = await this.windowManager.attachToWindow(windowId, connection.user.email);
-      
-      if (!this.windowOutputListeners.has(windowId)) {
-        this.windowOutputListeners.add(windowId);
-        
-        pty.onData((data) => {
-          this.broadcastToWindow(windowId, {
-            type: 'window:output',
-            windowId,
-            data,
-          });
+      // REORDERED to prevent race condition:
+      // 1. Capture screen FIRST (before attaching PTY listener)
+      // 2. Send restore IMMEDIATELY
+      // 3. THEN attach PTY and register output listener ONLY ONCE per window
+      //
+      // This prevents live output from racing with restore content.
+      // The client enters "restore mode" which discards incoming window:output
+      // messages until restore completes.
 
-          if (connection.sessionId) {
-            this.automationEngine.checkOutput(connection.sessionId, connection.user.email, data);
-          }
-        });
-      }
+      // Step 1: Capture current screen content FIRST (with health-aware scrollback)
+      const healthScore = connection.healthScore ?? 100;
+      const screenContent = await this.windowManager.captureScreen(
+        windowId,
+        connection.user.email,
+        cols,
+        rows,
+        healthScore
+      );
 
-      const screenContent = await this.windowManager.captureScreen(windowId, connection.user.email, cols, rows);
+      // Step 2: Send restore IMMEDIATELY (before any live output can arrive)
       if (screenContent) {
         this.send(connection.ws, {
           type: 'window:restore',
@@ -696,6 +894,43 @@ export class ConnectionManager {
           data: screenContent,
         });
       }
+
+      // Step 3: NOW attach PTY and register listener for live output
+      const pty = await this.windowManager.attachToWindow(windowId, connection.user.email);
+
+      // CRITICAL FIX: Only register ONE listener per window (not per connection/subscription)
+      // Multiple subscriptions to the same window should NOT create duplicate listeners
+      let state = this.windowListenerStates.get(windowId);
+      if (!state) {
+        state = { registered: false, listenerCount: 0 };
+        this.windowListenerStates.set(windowId, state);
+      }
+
+      if (!state.registered) {
+        state.registered = true;
+
+        pty.onData((data) => {
+          this.broadcastToWindow(windowId, {
+            type: 'window:output',
+            windowId,
+            data,
+          });
+
+          // Get any active connection for this window to check automation
+          const firstConnection = Array.from(this.connections.values()).find(
+            (conn) => conn.windowSubscriptions.has(windowId)
+          );
+          if (firstConnection?.sessionId) {
+            this.automationEngine.checkOutput(
+              firstConnection.sessionId,
+              firstConnection.user.email,
+              data
+            );
+          }
+        });
+      }
+
+      state.listenerCount++;
     } catch (error) {
       console.error(`Failed to setup output for window ${windowId}:`, error);
     }
@@ -705,9 +940,22 @@ export class ConnectionManager {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
 
+    // CRITICAL: Clear any pending window subscribe timers BEFORE other cleanup
+    // This prevents orphaned setupWindowOutput() calls from firing after connection is gone
+    const timerKeysToDelete: string[] = [];
+    for (const [timerKey, timer] of this.windowSubscribeTimers.entries()) {
+      if (timerKey.startsWith(`${connectionId}:`)) {
+        clearTimeout(timer);
+        timerKeysToDelete.push(timerKey);
+      }
+    }
+    for (const timerKey of timerKeysToDelete) {
+      this.windowSubscribeTimers.delete(timerKey);
+    }
+
     if (connection.sessionId) {
       this.deviceManager.unregisterDevice(connection.sessionId, connection.deviceId);
-      
+
       const remainingDevices = this.deviceManager.getActiveDeviceCount(connection.sessionId);
       if (remainingDevices === 0) {
         this.store.updateState(connection.sessionId, 'dormant');
@@ -785,11 +1033,19 @@ export class ConnectionManager {
       clearInterval(this.heartbeatInterval);
     }
 
+    // Clear all pending subscribe timers
+    for (const timer of this.windowSubscribeTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.windowSubscribeTimers.clear();
+
     this.connections.forEach((connection) => {
       connection.ws.close();
     });
 
     this.connections.clear();
+    this.windowListenerStates.clear();
+    this.cronsInitializedForUsers.clear();
   }
 
   broadcastToAll(message: ServerMessage): void {

@@ -28,6 +28,8 @@ interface SidePanelProps {
   onCanvasRemoveArtifact?: (id: string) => void;
   onCanvasToggleStar?: (id: string) => void;
   onCanvasSendToTerminal?: (content: string) => void;
+  showLightning?: boolean;
+  onLightningChange?: (enabled: boolean) => void;
 }
 
 type TabId = 'automations' | 'commands' | 'templates' | 'sessions' | 'settings' | 'uploads' | 'canvas';
@@ -124,6 +126,8 @@ export default function SidePanel({
   onCanvasRemoveArtifact,
   onCanvasToggleStar,
   onCanvasSendToTerminal,
+  showLightning,
+  onLightningChange,
 }: SidePanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('commands');
   const [isClosing, setIsClosing] = useState(false);
@@ -278,7 +282,11 @@ export default function SidePanel({
             <UploadPanel />
           )}
           {activeTab === 'settings' && (
-            <SettingsPanel onPreferencesChange={onPreferencesChange} />
+            <SettingsPanel
+              onPreferencesChange={onPreferencesChange}
+              showLightning={showLightning}
+              onLightningChange={onLightningChange}
+            />
           )}
           {activeTab === 'canvas' && (
             <CanvasPanel
@@ -291,6 +299,8 @@ export default function SidePanel({
               onRemoveArtifact={onCanvasRemoveArtifact}
               onToggleStar={onCanvasToggleStar}
               onSendToTerminal={onCanvasSendToTerminal}
+              isExpanded={isExpanded}
+              onExpandPanel={onToggleExpand}
             />
           )}
         </div>

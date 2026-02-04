@@ -24,7 +24,7 @@ export const TERMINAL_DEFAULTS = {
   rows: 40,
   fontSize: 14,
   fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-  scrollback: 50000,
+  scrollback: 5000, // Reduced from 20000 to prevent WebGL OOM on context loss recovery
 };
 
 export const RESIZE_CONSTANTS = {

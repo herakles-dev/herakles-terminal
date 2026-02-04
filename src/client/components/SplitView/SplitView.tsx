@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useOptionalResizeCoordinator } from '../../contexts/ResizeCoordinatorContext';
+import { ContextIndicator } from '../ContextIndicator';
+import type { ContextUsage } from '../../../shared/contextProtocol';
 
 interface WindowConfig {
   id: string;
@@ -51,6 +53,10 @@ interface SplitViewProps {
   sidePanelOpen?: boolean;
   sidePanelExpanded?: boolean;
   minimapVisible?: boolean;
+  leftOffset?: number;
+  contextUsage?: Map<string, ContextUsage>; // Context usage by windowId
+  todoCount?: number;        // Total pending + in_progress todos
+  todoHasActive?: boolean;   // True if any are in_progress (for glow effect)
 }
 
 const SNAP_THRESHOLD = 0.03;
@@ -65,10 +71,6 @@ function snapToGrid(value: number): number {
   return value;
 }
 
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
-}
-
 export default function SplitView({
   windows,
   activeWindowId,
@@ -79,11 +81,15 @@ export default function SplitView({
   onLayoutChange,
   onAddWindow,
   onWindowRename,
-  onLayoutsChange,
+  onLayoutsChange: _onLayoutsChange,
   renderTerminal,
   sidePanelOpen = false,
   sidePanelExpanded = false,
   minimapVisible = false,
+  leftOffset = 0,
+  contextUsage,
+  todoCount,
+  todoHasActive,
 }: SplitViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<{ id: string; startX: number; startY: number; startLayout: WindowConfig; flushStartLayouts: Map<string, WindowConfig> } | null>(null);
@@ -98,15 +104,10 @@ export default function SplitView({
   const [dropZones, setDropZones] = useState<DropZone[]>([]);
   const [activeDropZone, setActiveDropZone] = useState<DropZone | null>(null);
   const [selectedWindows, setSelectedWindows] = useState<Set<string>>(new Set());
-  const [animating, setAnimatingState] = useState(false);
+  const [animating] = useState(false);
   const animationFrameRef = useRef<number | null>(null);
   const [flushGroup, setFlushGroup] = useState<Set<string>>(new Set());
   const resizeCoordinator = useOptionalResizeCoordinator();
-  
-  const setAnimating = useCallback((value: boolean) => {
-    setAnimatingState(value);
-    resizeCoordinator?.setAnimating(value);
-  }, [resizeCoordinator]);
 
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -191,7 +192,7 @@ export default function SplitView({
     }
   }, [visibleWindows, calculateDragZones, isMobile]);
 
-  const calculateDropZones = useCallback((targetWindow: WindowConfig, draggedWindow: WindowConfig): DropZone[] => {
+  const calculateDropZones = useCallback((targetWindow: WindowConfig, _draggedWindow: WindowConfig): DropZone[] => {
     const { x, y, width, height } = targetWindow;
     
     return [
@@ -361,58 +362,6 @@ export default function SplitView({
     e.stopPropagation();
     setActiveDragZone(zone);
   }, []);
-
-  const applyLayoutWithAnimation = useCallback((newLayouts: WindowLayout[]) => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-
-    const duration = 300;
-    const startTime = Date.now();
-    const startLayouts = visibleWindows.map(w => ({
-      x: w.x,
-      y: w.y,
-      width: w.width,
-      height: w.height,
-    }));
-
-    setAnimating(true);
-
-    function animate() {
-      const elapsed = Date.now() - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      const eased = easeOutCubic(progress);
-
-      visibleWindows.forEach((w, i) => {
-        if (i >= newLayouts.length) return;
-        
-        const start = startLayouts[i];
-        const end = newLayouts[i];
-
-        const interpolated = {
-          x: start.x + (end.x - start.x) * eased,
-          y: start.y + (end.y - start.y) * eased,
-          width: start.width + (end.width - start.width) * eased,
-          height: start.height + (end.height - start.height) * eased,
-        };
-
-        onLayoutChange(w.id, interpolated);
-      });
-
-      if (progress < 1) {
-        animationFrameRef.current = requestAnimationFrame(animate);
-      } else {
-        setAnimating(false);
-        visibleWindows.forEach((w, i) => {
-          if (i < newLayouts.length) {
-            onLayoutChange(w.id, newLayouts[i]);
-          }
-        });
-      }
-    }
-
-    animationFrameRef.current = requestAnimationFrame(animate);
-  }, [visibleWindows, onLayoutChange]);
 
   useEffect(() => {
     return () => {
@@ -783,7 +732,7 @@ export default function SplitView({
   const rightOffset = (minimapVisible ? minimapWidth : 0) + (sidePanelOpen ? sidePanelWidth : 0);
 
   return (
-    <div ref={containerRef} className="absolute bg-[#0a0a0f]" style={{ top: 0, left: 0, bottom: 0, right: rightOffset }}>
+    <div ref={containerRef} className="absolute bg-[#0a0a0f]" style={{ top: 0, left: leftOffset, bottom: 0, right: rightOffset }}>
       {snapGuides.x !== undefined && (
         <div 
           className="snap-guide snap-guide-v"
@@ -892,9 +841,9 @@ export default function SplitView({
           onClick={(e) => !window.isMinimized && handleWindowClick(e, window.id)}
         >
           <div
-            className={`relative flex items-center justify-between px-3.5 py-2.5 border-b cursor-move select-none window-header ${
-              activeWindowId === window.id 
-                ? 'bg-gradient-to-r from-[#0c0c14] via-[#0f0f18] to-[#0c0c14] border-white/[0.06]' 
+            className={`relative flex items-center justify-between px-3 py-1.5 border-b cursor-move select-none window-header ${
+              activeWindowId === window.id
+                ? 'bg-gradient-to-r from-[#0c0c14] via-[#0f0f18] to-[#0c0c14] border-white/[0.06]'
                 : 'bg-[#0a0a0f] border-white/[0.04]'
             }`}
             onMouseDown={(e) => handleDragStart(e, window)}
@@ -903,11 +852,25 @@ export default function SplitView({
               <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />
             )}
             <div className="flex items-center gap-2.5">
-              <span className={`w-3 h-3 rounded-full transition-all duration-200 ${
-                window.isMain 
-                  ? 'bg-[#00d4ff] shadow-[0_0_8px_rgba(0,212,255,0.5)]' 
+              <span className={`w-2.5 h-2.5 rounded-full transition-all duration-200 ${
+                window.isMain
+                  ? 'bg-[#00d4ff] shadow-[0_0_8px_rgba(0,212,255,0.5)]'
                   : 'bg-[#22c55e] shadow-[0_0_6px_rgba(34,197,94,0.4)]'
               }`} />
+              {contextUsage?.get(window.id) && (
+                <ContextIndicator usage={contextUsage.get(window.id) || null} size={18} />
+              )}
+              {todoCount !== undefined && todoCount > 0 && activeWindowId === window.id && (
+                <span className={`
+                  min-w-[16px] h-[16px] flex items-center justify-center
+                  text-[9px] font-bold rounded-full px-1
+                  ${todoHasActive
+                    ? 'bg-[#00d4ff] text-black shadow-[0_0_8px_rgba(0,212,255,0.5)] animate-pulse'
+                    : 'bg-[#71717a] text-white'}
+                `}>
+                  {todoCount > 9 ? '9+' : todoCount}
+                </span>
+              )}
               {editingWindowId === window.id ? (
                 <input
                   type="text"
@@ -935,8 +898,8 @@ export default function SplitView({
                   className="text-sm text-white bg-[#1c1c26] border border-[#00d4ff]/40 rounded-md px-2 py-0.5 outline-none w-28 focus:border-[#00d4ff]/60 focus:shadow-[0_0_8px_rgba(0,212,255,0.15)]"
                 />
               ) : (
-                <span 
-                  className={`text-base cursor-text transition-colors ${
+                <span
+                  className={`text-sm cursor-text transition-colors ${
                     activeWindowId === window.id ? 'text-[#e4e4e7]' : 'text-[#a1a1aa] hover:text-white'
                   }`}
                   onDoubleClick={(e) => {
@@ -953,17 +916,17 @@ export default function SplitView({
             <div className="window-controls flex items-center gap-0.5">
               <button
                 onClick={() => onWindowMinimize(window.id)}
-                className="p-2 text-[#8a8a92] hover:text-[#fbbf24] hover:bg-[#fbbf24]/10 rounded-md transition-all duration-150"
+                className="p-1.5 text-[#8a8a92] hover:text-[#fbbf24] hover:bg-[#fbbf24]/10 rounded-md transition-all duration-150"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
                 </svg>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onWindowClose(window.id); }}
-                className="p-2 text-[#8a8a92] hover:text-[#f87171] hover:bg-[#ef4444]/10 rounded-md transition-all duration-150"
+                className="p-1.5 text-[#8a8a92] hover:text-[#f87171] hover:bg-[#ef4444]/10 rounded-md transition-all duration-150"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>

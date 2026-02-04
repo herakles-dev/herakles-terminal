@@ -2,9 +2,12 @@ import { Request, Response, NextFunction } from 'express';
 
 const CSP_DIRECTIVES = [
   "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "connect-src 'self' wss://zeus.herakles.dev",
+  "script-src 'self' https://www.youtube.com https://s.ytimg.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
+  "img-src 'self' https://i.ytimg.com https://img.youtube.com data:",
+  "connect-src 'self' wss://zeus.herakles.dev wss://terminal.herakles.dev",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

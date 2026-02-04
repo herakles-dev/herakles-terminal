@@ -9,7 +9,47 @@
 - **Status:** Production-ready with recent display quality improvements complete
 
 ## Recent Changes (January 2026)
-The 6-phase display quality refactor is **complete**:
+
+### Scrollback Reduction for WebGL Stability (Latest)
+- ✅ **Scrollback 20K → 5K** - Prevents WebGL OOM on context loss recovery
+- ✅ **Tmux capture 50K → 5K** - Faster restore, less stale content
+- ✅ **Dots pattern fixed** - Smaller capture window eliminates Claude thinking dots persistence
+
+### WebGL Context Menu & OOM Recovery
+- ✅ **Context Menu Fix** - Capture-phase listener intercepts before xterm.js allows native menu
+- ✅ **Selection Tracking** - `selectionRefs` tracks selection since WebGL clears on right-click mouseup
+- ✅ **OOM Recovery** - On WebGL context loss, clears buffer and reduces scrollback (50K → 5K)
+- ✅ **Cleanup Handlers** - `contextMenuHandlersRef` tracks listeners for proper disposal
+
+### Display Stability & WebGL-Only
+- ✅ **Race Condition Fix** - `window:restore` now sent before client joins broadcast group
+- ✅ **WebGL-Only Rendering** - Removed Canvas fallback, WebGL required (fails instead of degrading)
+- ✅ **Simplified Renderer** - `useRendererSetup.ts` reduced from fallback chain to single WebGL path
+- ✅ **Clean Refresh** - Terminal content restores correctly on browser refresh (no more dots pattern)
+
+### TodoPanel - Claude Code Integration
+- ✅ **Live Task Display** - Shows Claude Code's TodoWrite tasks in real-time
+- ✅ **Global Watcher** - Monitors `~/.claude/todos/` for all sessions
+- ✅ **Collapsible Panel** - Left sidebar (48px collapsed, 280px expanded)
+- ✅ **Status Indicators** - Pending, in-progress (animated), completed states
+- ✅ **WebSocket Sync** - `todo:subscribe`, `todo:sync`, `todo:update` messages
+
+### Token Counter - Claude Code Context Usage (February 2026)
+- ✅ **Real-Time Context Tracking** - Circular indicator shows Claude Code context window usage
+- ✅ **Project Auto-Detection** - Automatically matches windows to Claude Code projects via cwd
+- ✅ **Color-Coded Alerts** - Green (<50%), yellow (50-75%), orange (75-90%), red (90%+)
+- ✅ **Live Updates** - Watches `~/.claude/projects/*.jsonl` for token usage changes
+- ✅ **Database Migration** - Backfills `auto_name` for existing windows on server startup
+- ✅ **Hover Tooltip** - Shows detailed token counts (e.g., "Context: 78,931 / 200,000 tokens (39%)")
+
+### Project Navigator Enhancement
+- ✅ **Smart Merge Logic** - Matches projects by path AND directory-name-to-id fallback
+- ✅ **Auto-Add API** - `GET /api/projects/unregistered` and `POST /api/projects/register`
+- ✅ **AI Thumbnails** - 114 gradient icons in `public/thumbnails/`, auto-detected per project
+- ✅ **Registry-Only Discovery** - Nested paths like `projects/math-visualization` now discovered
+- ✅ **Fallback System** - Thumbnails with graceful fallback to tech-stack SVG icons
+
+### Display Quality Refactor (Complete)
 - ✅ OutputPipelineManager consolidates buffer handling
 - ✅ Resize coordination simplified (8 refs → 4 refs)
 - ✅ Renderer lifecycle uses MutationObserver + state machine
@@ -21,8 +61,8 @@ See `docs/archive/2026-01-refactor/` for historical implementation details.
 ## Project Discovery
 ```bash
 # Structure
-ls src/client/components/    # React components (17 dirs)
-ls src/server/               # Backend modules (16 dirs, incl. search/)
+ls src/client/components/    # React components (17 dirs, incl. TodoPanel/)
+ls src/server/               # Backend modules (16 dirs, incl. todo/)
 ls docs/                     # Documentation
 
 # Current state
@@ -48,8 +88,8 @@ npm run typecheck && npm run lint
 # After client changes
 npm run build && curl -s http://localhost:8096/api/health | jq
 
-# After server changes
-npm run build && docker restart zeus-terminal && sleep 3 && curl -s http://localhost:8096/api/health
+# After server changes (systemd service)
+npm run build && systemctl --user restart zeus-terminal && sleep 3 && curl -s http://localhost:8096/api/health
 
 # After WebSocket changes
 npm test -- --grep "websocket" && npm run dev  # Manual test in browser
@@ -75,22 +115,21 @@ npm test -- --watch
 **Test location:** Tests live next to source in `__tests__/` directories.
 **Naming:** `ComponentName.test.ts` or `hookName.test.ts`
 
-## Docker / Service Commands
+## Service Commands
 ```bash
-# View container status
-docker ps | grep zeus
+# Production (systemd)
+systemctl --user status zeus-terminal      # Check status
+systemctl --user restart zeus-terminal     # Restart service
+journalctl --user -u zeus-terminal -f      # View logs
 
-# Restart service
-docker restart zeus-terminal
+# Development (docker-compose)
+docker-compose up -d                       # Start containers
+docker-compose logs -f zeus-terminal       # View logs
+docker-compose restart zeus-terminal       # Restart
 
-# View container logs
-docker logs zeus-terminal --tail 100
-
-# Rebuild and restart
-docker-compose build && docker-compose up -d
-
-# Enter container shell
-docker exec -it zeus-terminal /bin/sh
+# Check what's running
+lsof -i :8096                              # Find process on port
+curl -s http://localhost:8096/api/health   # Health check
 ```
 
 ## DO NOT
@@ -134,28 +173,32 @@ Client (src/client/)                Server (src/server/)
 ├── App.tsx                         ├── index.ts (Express + WebSocket)
 ├── components/                     ├── api/routes.ts
 │   ├── TerminalCore/               ├── api/commands.ts (search integration)
-│   ├── SplitView/                  ├── api/templates.ts (595 built-in templates)
+│   ├── SplitView/                  ├── api/templates.ts (88 built-in templates)
 │   ├── SidePanel/                  ├── websocket/ConnectionManager.ts
 │   │   └── CommandBuilder.tsx      ├── session/SessionManager.ts
-│   ├── Canvas/                     ├── session/SessionStore.ts (SQLite)
-│   ├── MobileInputHandler/         ├── tmux/TmuxManager.ts
-│   ├── QuickKeyBar/                ├── canvas/ArtifactWatcher.ts
-│   └── Toast/                      ├── search/ (command discovery)
-├── hooks/                          │   ├── SearchEngine.ts (fuzzy search)
-│   ├── useWebSocket.ts             │   └── ContextDetector.ts
-│   ├── useXTermSetup.ts            ├── middleware/ (auth, csrf, rate-limit)
-│   ├── useRendererSetup.ts         └── audit/AuditLogger.ts
-│   └── useResizeCoordinator.ts
-├── services/
+│   ├── TodoPanel/                  ├── session/SessionStore.ts (SQLite)
+│   ├── Canvas/                     ├── tmux/TmuxManager.ts
+│   ├── MusicPlayer/                ├── canvas/ArtifactWatcher.ts
+│   ├── MobileInputHandler/         ├── music/ (audio playback)
+│   ├── QuickKeyBar/                ├── todo/ (Claude Code sync)
+│   └── Toast/                      │   ├── TodoManager.ts
+├── hooks/                          │   └── TodoFileWatcher.ts
+│   ├── useWebSocket.ts             ├── search/ (command discovery)
+│   ├── useXTermSetup.ts            │   ├── SearchEngine.ts (fuzzy search)
+│   ├── useRendererSetup.ts         │   └── ContextDetector.ts
+│   └── useResizeCoordinator.ts     ├── middleware/ (auth, csrf, rate-limit)
+├── services/                       └── audit/AuditLogger.ts
 │   └── OutputPipelineManager.ts
 └── styles/terminal.css
 
 Shared (src/shared/)
-├── types.ts       # TypeScript interfaces
-├── protocol.ts    # WebSocket message types
-├── constants.ts   # Config defaults
-├── themes.ts      # Terminal themes (6 built-in)
-└── errors.ts      # Error types
+├── types.ts          # TypeScript interfaces
+├── protocol.ts       # WebSocket message types
+├── todoProtocol.ts   # Todo sync protocol
+├── musicProtocol.ts  # Music player protocol
+├── constants.ts      # Config defaults
+├── themes.ts         # Terminal themes (6 built-in)
+└── errors.ts         # Error types
 ```
 
 ## Key Files
@@ -170,7 +213,7 @@ Shared (src/shared/)
 | WebSocket client | `src/client/hooks/useWebSocket.ts` |
 | XTerm setup | `src/client/hooks/useXTermSetup.ts` |
 | Resize coordinator | `src/client/hooks/useResizeCoordinator.ts` |
-| Renderer setup | `src/client/hooks/useRendererSetup.ts` |
+| **Renderer setup (WebGL + OOM recovery)** | `src/client/hooks/useRendererSetup.ts` |
 | Terminal CSS | `src/client/styles/terminal.css` |
 | Server entry | `src/server/index.ts` |
 | WebSocket server | `src/server/websocket/ConnectionManager.ts` |
@@ -182,6 +225,123 @@ Shared (src/shared/)
 | Shared types | `src/shared/types.ts` |
 | **Theme definitions** | `src/shared/themes.ts` |
 | WebSocket protocol | `src/shared/protocol.ts` |
+| **Project Navigator** | `src/client/components/ProjectNavigator/` |
+| Project API | `src/server/api/projects.ts` |
+| **Project thumbnails** | `public/thumbnails/*.png` |
+| **TodoPanel** | `src/client/components/TodoPanel/` |
+| TodoManager | `src/server/todo/TodoManager.ts` |
+| TodoFileWatcher | `src/server/todo/TodoFileWatcher.ts` |
+| Todo protocol | `src/shared/todoProtocol.ts` |
+
+## Project Navigator System
+
+The ProjectNavigator provides quick access to all Hercules platform projects:
+
+**Features:**
+- **Dynamic project discovery** from filesystem + APPS_REGISTRY.json merge
+- **AI-generated thumbnails** (114 gradient icons, auto-detected)
+- **Smart matching** - matches by path OR directory-name-to-id fallback
+- **Category filtering** - 15 categories from registry
+- **Favorites** - stored in localStorage
+- **Search** - fuzzy search across name, path, description, category
+
+**API Endpoints:**
+```
+GET  /api/projects              - List all projects (60s cache)
+GET  /api/projects/categories   - Get category definitions
+GET  /api/projects/unregistered - Find unregistered root folders
+POST /api/projects/register     - Add new project to registry
+POST /api/projects/refresh      - Clear cache
+```
+
+**Thumbnail System:**
+```bash
+# Thumbnails stored in public/thumbnails/{project-id}.png
+# Auto-detected by projects.ts addThumbnails() function
+# Fallback to tech-stack SVG icons (Docker, Node, Python, Rust, Go)
+
+# Generate new thumbnails with image-gen-suite:
+cd /home/hercules/image-gen-suite
+python3 -c "
+from generators.icon import generate_icon
+icon = generate_icon('XX', size=256, style='gradient',
+                    primary_color='#00d4ff', secondary_color='#0891b2', rounded=True)
+icon.save('/home/hercules/herakles-terminal/public/thumbnails/my-project.png')
+"
+```
+
+## Token Counter System (Claude Code Context Tracking)
+
+The ContextIndicator displays real-time Claude Code context window usage on window titles:
+
+**Features:**
+- **Auto-detection** - Matches windows to projects via `auto_name` field (extracted from cwd)
+- **Live monitoring** - `ContextFileWatcher` watches `~/.claude/projects/{project}/*.jsonl`
+- **Color coding** - Visual feedback: green → yellow → orange → red as context fills
+- **Tooltip details** - Hover shows "Context: X / 200,000 tokens (Y%)"
+- **Migration** - Backfills existing windows on server startup
+
+**How it works:**
+1. Window created → `TmuxManager.getCurrentWorkingDirectory()` gets cwd
+2. `WindowManager.extractProjectName()` extracts project (e.g., "herakles-terminal")
+3. Stored in `windows.auto_name` field in database
+4. Client sends `context:subscribe` with windowId on terminal ready
+5. `ContextManager` looks up `auto_name`, encodes to `-home-hercules-{project}`
+6. Matches to `~/.claude/projects/-home-hercules-{project}/` directory
+7. `ContextFileWatcher` reads latest `.jsonl` file, extracts `usage` data
+8. Broadcasts `context:sync` → client renders `ContextIndicator`
+
+**WebSocket Messages:**
+```typescript
+// Client → Server
+{ type: 'context:subscribe', windowId }
+{ type: 'context:unsubscribe', windowId }
+
+// Server → Client
+{ type: 'context:sync', windowId, usage }    // Initial state
+{ type: 'context:update', windowId, usage }  // Live updates
+```
+
+**Troubleshooting:**
+- **No indicator shows:** Check if window has `auto_name` populated (must be in `/home/hercules/{project}`)
+- **Always shows null:** Verify `~/.claude/projects/-home-hercules-{project}/` exists
+- **Not updating:** Check `ContextFileWatcher` logs for file processing errors
+
+## TodoPanel System (Claude Code Integration)
+
+The TodoPanel displays live task updates from Claude Code's TodoWrite tool:
+
+**Features:**
+- **Live sync** - Watches `~/.claude/todos/` for real-time updates
+- **Per-window** - Each terminal window shows its own todo list
+- **Collapsible** - 48px collapsed, 280px expanded
+- **Status indicators** - Pending (gray), in-progress (cyan glow), completed (green check)
+- **Glass morphism UI** - Matches terminal aesthetic
+
+**How it works:**
+1. Claude Code writes todos to `~/.claude/todos/{session-id}.json`
+2. `TodoFileWatcher` detects changes via `fs.watch()`
+3. `TodoManager` broadcasts updates via WebSocket
+4. `TodoPanel` renders with status-sorted list
+
+**WebSocket Messages:**
+```typescript
+// Client → Server
+{ type: 'todo:subscribe', windowId }
+{ type: 'todo:unsubscribe', windowId }
+
+// Server → Client
+{ type: 'todo:sync', windowId, todos }
+{ type: 'todo:update', windowId, todos, source }
+{ type: 'todo:clear', windowId }
+```
+
+**File format** (Claude Code native):
+```json
+[
+  { "content": "Task description", "status": "in_progress", "activeForm": "Working on task" }
+]
+```
 
 ## WebSocket Protocol
 ```typescript
@@ -191,6 +351,8 @@ Shared (src/shared/)
 { type: 'window:subscribe', windowId }
 { type: 'session:create', name? }
 { type: 'session:resume', sessionId }
+{ type: 'todo:subscribe', windowId }
+{ type: 'todo:unsubscribe', windowId }
 
 // Server → Client
 { type: 'auth-success', token, sessions }
@@ -199,9 +361,12 @@ Shared (src/shared/)
 { type: 'window:output', windowId, data }
 { type: 'window:restore', windowId, content }
 { type: 'canvas:artifact', artifact }
+{ type: 'todo:sync', windowId, todos }
+{ type: 'todo:update', windowId, todos, source }
+{ type: 'todo:clear', windowId }
 { type: 'error', code, message }
 ```
-See `src/shared/protocol.ts` for complete list.
+See `src/shared/protocol.ts` and `src/shared/todoProtocol.ts` for complete list.
 
 ## Canvas Artifact System
 ```bash
@@ -216,7 +381,7 @@ See `docs/CANVAS.md` for full documentation.
 The CommandBuilder in SidePanel provides intelligent command suggestions:
 
 **Features:**
-- **595 built-in templates** across categories: git, docker, npm, system, ssh, claude
+- **88 built-in templates** across categories: git, docker, npm, system, ssh, claude
 - **Fuzzy search** with Jaro-Winkler similarity (finds "gti status" → "git status")
 - **Context-aware boosting** - git commands boosted in git repos, docker commands near compose files
 - **User history integration** - recent commands ranked by frequency and recency
@@ -311,6 +476,7 @@ See `docs/guides/DEBUGGING_GUIDE.md` for detailed log correlation.
 | Database locked | `sqlite3 data/zeus.db ".tables"` to test, restart if locked |
 | tmux session stuck | `tmux -S /tmp/zeus-tmux kill-server` and restart |
 | WebSocket disconnects | Check `server.log` for connection errors |
+| WebGL context lost | Auto-recovers: clears buffer, reduces scrollback to 5K lines |
 
 ## Security
 - **Auth:** Cloudflare Access (Authelia middleware)

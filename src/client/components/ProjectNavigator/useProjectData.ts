@@ -15,6 +15,7 @@ export interface ProjectInfo {
   lastModified: string;
   url?: string;
   port?: number;
+  thumbnail?: string; // URL path to AI-generated thumbnail
   isFavorite?: boolean;
 }
 

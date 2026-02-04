@@ -7,7 +7,7 @@ import sharp from 'sharp';
 import { AutheliaUser } from './autheliaAuth.js';
 
 const UPLOAD_ROOT = '/home/hercules/uploads';
-const MAX_FILE_SIZE = 50 * 1024 * 1024;  // 50MB per file
+const MAX_FILE_SIZE = 100 * 1024 * 1024;  // 100MB per file
 const MAX_FILES_PER_REQUEST = 10;
 const USER_QUOTA_BYTES = 500 * 1024 * 1024;  // 500MB total per user
 const THUMBNAIL_SIZE = 200;
