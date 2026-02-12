@@ -38,19 +38,29 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
       }
     }, [enabled]);
 
-    // Prevent iOS pull-to-refresh when at scroll top
+    // Prevent iOS pull-to-refresh when swiping down from top
     useEffect(() => {
       if (!enabled) return;
 
-      const handler = (e: TouchEvent) => {
-        // Block overscroll when scrolled to top (prevents pull-to-refresh)
-        if (document.documentElement.scrollTop <= 0 && e.touches[0]?.clientY > 0) {
+      let startY = 0;
+      const handleTouchStart = (e: TouchEvent) => {
+        startY = e.touches[0]?.clientY ?? 0;
+      };
+      const handleTouchMove = (e: TouchEvent) => {
+        const currentY = e.touches[0]?.clientY ?? 0;
+        const isSwipingDown = currentY > startY;
+        // Only block downward swipe when page is at scroll top (pull-to-refresh gesture)
+        if (document.documentElement.scrollTop <= 0 && isSwipingDown) {
           e.preventDefault();
         }
       };
 
-      document.addEventListener('touchmove', handler, { passive: false });
-      return () => document.removeEventListener('touchmove', handler);
+      document.addEventListener('touchstart', handleTouchStart, { passive: true });
+      document.addEventListener('touchmove', handleTouchMove, { passive: false });
+      return () => {
+        document.removeEventListener('touchstart', handleTouchStart);
+        document.removeEventListener('touchmove', handleTouchMove);
+      };
     }, [enabled]);
 
     useImperativeHandle(ref, () => ({
