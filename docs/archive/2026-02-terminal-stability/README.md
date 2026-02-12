@@ -15,6 +15,13 @@ This archive contains documentation from the terminal stability overhaul complet
 
 ## Documents
 
+### Latest Fixes (February 2026)
+- **Feb 12, 2026** - Multiwindow drag fix (Commit `47b581a`)
+  - Visual-only preview during drag (60fps smooth movement)
+  - Deferred resize on mouseup or 2s idle
+  - Eliminates black bars and dimension mismatches
+  - +193 / -124 lines, helper function extraction
+
 ### Implementation Tracking
 - `PHASE_1_IMPLEMENTATION.md` - Initial WebGL telemetry phase
 - `PHASE_2_IMPLEMENTATION.md` - Display pipeline phase

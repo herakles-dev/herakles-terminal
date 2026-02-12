@@ -10,7 +10,22 @@
 
 ## Recent Major Changes
 
-### Terminal Stability Overhaul (February 2026) — Latest
+### Multiwindow Drag Fix (February 12, 2026) — Latest
+**Commit**: `47b581a` | **Impact**: UX Critical | **Changed**: +193 / -124 lines
+
+**Problem**: Instant resize during drag caused black bars and dimension mismatches
+**Solution**: Visual-only preview with deferred resize (on mouseup or 2s idle)
+
+**Key Improvements:**
+- ✅ 60fps smooth drag with cyan preview line
+- ✅ Zero visual glitches during drag (no black bars)
+- ✅ Deferred terminal resize (mouseup or 2s idle)
+- ✅ Extracted reusable layout calculation helpers
+- ✅ Clean separation: preview state vs. actual layouts
+
+See commit `47b581a` and `docs/archive/2026-02-terminal-stability/README.md` for details.
+
+### Terminal Stability Overhaul (January 2026)
 17 fixes across 13 files. 183/183 tests pass. Net -155 lines.
 
 **Highlights:**
@@ -21,7 +36,7 @@
 - ✅ WebGL scrolling fix - removed forced scrollbar stealing column space
 - ✅ Mobile containment softened (`strict` → `layout style`)
 
-See `docs/archive/2026-01-refactor/` for complete implementation details.
+See `docs/archive/2026-02-terminal-stability/` for complete implementation details.
 
 ### Feature Integrations
 - ✅ **TodoPanel** - Live Claude Code task sync from `~/.claude/todos/`
