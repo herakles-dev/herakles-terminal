@@ -299,6 +299,9 @@ export class AutomationEngine {
     for (const step of steps) {
       // Skip validation for empty commands (used to just send \r)
       if (step.command === '') continue;
+      // Skip validation for interactive text input (noNewline steps are prompt text
+      // typed into applications like Claude Code, not shell commands)
+      if (step.noNewline) continue;
       const validation = validateAutomationCommand(step.command);
       if (!validation.valid) {
         return { success: false, output: `Invalid command in step: ${validation.error}` };

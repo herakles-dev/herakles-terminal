@@ -624,7 +624,15 @@ export default function App() {
       }
 
       case 'error':
-        console.error('WebSocket error:', msg.message);
+        console.error('WebSocket error:', msg.code, msg.message);
+        if (msg.code === 'SESSION_NOT_FOUND') {
+          // Stale session in localStorage - clear and create fresh
+          localStorage.removeItem('herakles-session-id');
+          sendMessageRef.current?.({ type: 'session:create' });
+        } else {
+          // Any other error while loading - exit loading state
+          setIsLoading(false);
+        }
         break;
     }
   }, []);
@@ -636,6 +644,10 @@ export default function App() {
       // This prevents stale data from corrupting the terminal after reconnection
       outputPipelineRef.current?.clearAll();
       pendingRestoreRef.current.clear();
+
+      // Reset loading state to prevent stuck loading screen
+      // (covers auth failure via close code 4001, network drops, etc.)
+      setIsLoading(false);
     }
 
     if (newState === 'connected') {
@@ -660,6 +672,16 @@ export default function App() {
       wasConnectedRef.current = true;
     }
   }, [refetchMissedArtifacts, windows]);
+
+  // Safety net: force exit loading state after 10 seconds
+  useEffect(() => {
+    if (!isLoading) return;
+    const timeout = setTimeout(() => {
+      console.error('[App] Loading timeout - forcing exit from loading state');
+      setIsLoading(false);
+    }, 10_000);
+    return () => clearTimeout(timeout);
+  }, [isLoading]);
 
   const wsUrl = useMemo(() => {
     if (showWelcome) return '';

@@ -255,7 +255,17 @@ export class ConnectionManager {
           return;
         }
         
-        this.handleMessage(connectionId, validation.data);
+        this.handleMessage(connectionId, validation.data).catch(error => {
+          console.error(`[ConnectionManager] Async message handler error:`, error);
+          const conn = this.connections.get(connectionId);
+          if (conn) {
+            this.send(conn.ws, {
+              type: 'error',
+              code: 'INTERNAL_ERROR',
+              message: 'Server error processing request',
+            });
+          }
+        });
       } catch (error) {
         console.error(`Invalid message from ${connectionId}:`, error);
         this.send(ws, {
