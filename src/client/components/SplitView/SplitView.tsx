@@ -109,6 +109,13 @@ export default function SplitView({
   const animationFrameRef = useRef<number | null>(null);
   const [flushGroup, setFlushGroup] = useState<Set<string>>(new Set());
   const resizeCoordinator = useOptionalResizeCoordinator();
+  const dragIdleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const DRAG_IDLE_DELAY_MS = 2000; // 2 second idle before resize during drag
+  const [dividerPreview, setDividerPreview] = useState<{
+    type: 'vertical' | 'horizontal';
+    position: number;
+    affectedWindows: [string, string];
+  } | null>(null);
 
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -389,6 +396,106 @@ export default function SplitView({
     });
   }, [onWindowFocus]);
 
+  // Helper: Calculate layout updates for vertical divider drag
+  const calculateVerticalDividerLayouts = useCallback((
+    newPosition: number,
+    win1Id: string,
+    win2Id: string,
+    allWindows: WindowConfig[]
+  ): Map<string, WindowLayout> => {
+    const threshold = 0.02;
+    const layouts = new Map<string, WindowLayout>();
+
+    const win1 = allWindows.find(w => w.id === win1Id);
+    const win2 = allWindows.find(w => w.id === win2Id);
+    if (!win1 || !win2) return layouts;
+
+    const win1RightEdge = win1.x + win1.width;
+    const dividerDelta = newPosition - win1RightEdge;
+
+    // Find all windows sharing the left column edge
+    const leftColumnWindows = allWindows.filter(w =>
+      Math.abs((w.x + w.width) - win1RightEdge) < threshold
+    );
+
+    // Find all windows sharing the right column edge
+    const win2LeftEdge = win2.x;
+    const rightColumnWindows = allWindows.filter(w =>
+      Math.abs(w.x - win2LeftEdge) < threshold
+    );
+
+    // Apply resize to all affected windows
+    leftColumnWindows.forEach(w => {
+      layouts.set(w.id, {
+        x: w.x,
+        y: w.y,
+        width: w.width + dividerDelta,
+        height: w.height
+      });
+    });
+
+    rightColumnWindows.forEach(w => {
+      layouts.set(w.id, {
+        x: w.x + dividerDelta,
+        y: w.y,
+        width: w.width - dividerDelta,
+        height: w.height
+      });
+    });
+
+    return layouts;
+  }, []);
+
+  // Helper: Calculate layout updates for horizontal divider drag
+  const calculateHorizontalDividerLayouts = useCallback((
+    newPosition: number,
+    win1Id: string,
+    win2Id: string,
+    allWindows: WindowConfig[]
+  ): Map<string, WindowLayout> => {
+    const threshold = 0.02;
+    const layouts = new Map<string, WindowLayout>();
+
+    const win1 = allWindows.find(w => w.id === win1Id);
+    const win2 = allWindows.find(w => w.id === win2Id);
+    if (!win1 || !win2) return layouts;
+
+    const win1BottomEdge = win1.y + win1.height;
+    const dividerDelta = newPosition - win1BottomEdge;
+
+    // Find all windows sharing the top row edge
+    const topRowWindows = allWindows.filter(w =>
+      Math.abs((w.y + w.height) - win1BottomEdge) < threshold
+    );
+
+    // Find all windows sharing the bottom row edge
+    const win2TopEdge = win2.y;
+    const bottomRowWindows = allWindows.filter(w =>
+      Math.abs(w.y - win2TopEdge) < threshold
+    );
+
+    // Apply resize to all affected windows
+    topRowWindows.forEach(w => {
+      layouts.set(w.id, {
+        x: w.x,
+        y: w.y,
+        width: w.width,
+        height: w.height + dividerDelta
+      });
+    });
+
+    bottomRowWindows.forEach(w => {
+      layouts.set(w.id, {
+        x: w.x,
+        y: w.y + dividerDelta,
+        width: w.width,
+        height: w.height - dividerDelta
+      });
+    });
+
+    return layouts;
+  }, []);
+
   const handleDragZoneStart = useCallback((e: React.MouseEvent, zone: DragZone) => {
     e.preventDefault();
     e.stopPropagation();
@@ -399,6 +506,9 @@ export default function SplitView({
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
+      }
+      if (dragIdleTimerRef.current) {
+        clearTimeout(dragIdleTimerRef.current);
       }
     };
   }, []);
@@ -480,81 +590,47 @@ export default function SplitView({
         const [win1Id, win2Id] = activeDragZone.affectedWindows;
         const win1 = visibleWindows.find(w => w.id === win1Id);
         const win2 = visibleWindows.find(w => w.id === win2Id);
-        
+
         if (!win1 || !win2) return;
-        
+
+        // Calculate new divider position based on mouse
+        let newPosition: number;
         if (activeDragZone.type === 'vertical') {
           const mouseX = (e.clientX - rect.left) / rect.width;
-
-          let newPosition = Math.max(win1.x + 0.15, Math.min(win2.x + win2.width - 0.15, mouseX));
-          // Snap disabled during drag for smoother feel - snaps on mouseup instead
-          // newPosition = snapToGrid(newPosition);
-          
-          const threshold = 0.02;
-          
-          // Find ALL windows that share the divider edge (win1's right edge)
-          const win1RightEdge = win1.x + win1.width;
-          const leftColumnWindows = visibleWindows.filter(w => 
-            Math.abs((w.x + w.width) - win1RightEdge) < threshold
-          );
-          
-          // Find ALL windows on the right side (share win2's left edge)
-          const win2LeftEdge = win2.x;
-          const rightColumnWindows = visibleWindows.filter(w => 
-            Math.abs(w.x - win2LeftEdge) < threshold
-          );
-          
-          // Calculate the divider movement delta
-          const dividerDelta = newPosition - win1RightEdge;
-          
-          // Resize all left column windows - each gets wider/narrower by divider delta
-          leftColumnWindows.forEach(w => {
-            const newWidth = w.width + dividerDelta;
-            onLayoutChange(w.id, { x: w.x, y: w.y, width: newWidth, height: w.height }, true);
-          });
-          
-          // Resize all right column windows - each gets narrower/wider by divider delta (opposite)
-          rightColumnWindows.forEach(w => {
-            const newWidth = w.width - dividerDelta;
-            const newX = w.x + dividerDelta;
-            onLayoutChange(w.id, { x: newX, y: w.y, width: newWidth, height: w.height }, true);
-          });
+          newPosition = Math.max(win1.x + 0.15, Math.min(win2.x + win2.width - 0.15, mouseX));
         } else {
           const mouseY = (e.clientY - rect.top) / rect.height;
-          let newPosition = Math.max(win1.y + 0.15, Math.min(win2.y + win2.height - 0.15, mouseY));
-          // Snap disabled during drag for smoother feel - snaps on mouseup instead
-          // newPosition = snapToGrid(newPosition);
-          
-          const threshold = 0.02;
-          
-          // Find ALL windows that share the divider edge (win1's bottom edge)
-          const win1BottomEdge = win1.y + win1.height;
-          const topRowWindows = visibleWindows.filter(w => 
-            Math.abs((w.y + w.height) - win1BottomEdge) < threshold
-          );
-          
-          // Find ALL windows on the bottom side (share win2's top edge)
-          const win2TopEdge = win2.y;
-          const bottomRowWindows = visibleWindows.filter(w => 
-            Math.abs(w.y - win2TopEdge) < threshold
-          );
-          
-          // Calculate the divider movement delta
-          const dividerDelta = newPosition - win1BottomEdge;
-          
-          // Resize all top row windows - each gets taller/shorter by divider delta
-          topRowWindows.forEach(w => {
-            const newHeight = w.height + dividerDelta;
-            onLayoutChange(w.id, { x: w.x, y: w.y, width: w.width, height: newHeight }, true);
-          });
-          
-          // Resize all bottom row windows - each gets shorter/taller by divider delta (opposite)
-          bottomRowWindows.forEach(w => {
-            const newHeight = w.height - dividerDelta;
-            const newY = w.y + dividerDelta;
-            onLayoutChange(w.id, { x: w.x, y: newY, width: w.width, height: newHeight }, true);
-          });
+          newPosition = Math.max(win1.y + 0.15, Math.min(win2.y + win2.height - 0.15, mouseY));
         }
+
+        // Update preview state ONLY (no layout changes during drag)
+        setDividerPreview({
+          type: activeDragZone.type,
+          position: newPosition,
+          affectedWindows: [win1Id, win2Id],
+        });
+
+        // Reset and schedule resize if drag is idle for 2 seconds
+        if (dragIdleTimerRef.current) {
+          clearTimeout(dragIdleTimerRef.current);
+        }
+        dragIdleTimerRef.current = setTimeout(() => {
+          // Apply layouts from current preview position after 2s idle
+          if (dividerPreview) {
+            // Apply snapping to final position
+            const snappedPosition = snapToGrid(dividerPreview.position);
+            const layouts = dividerPreview.type === 'vertical'
+              ? calculateVerticalDividerLayouts(snappedPosition, win1Id, win2Id, visibleWindows)
+              : calculateHorizontalDividerLayouts(snappedPosition, win1Id, win2Id, visibleWindows);
+
+            layouts.forEach((layout, windowId) => {
+              onLayoutChange(windowId, layout, false);
+            });
+
+            setDividerPreview(null);
+            resizeCoordinator?.triggerResize();
+          }
+        }, DRAG_IDLE_DELAY_MS);
       }
 
       if (resizing) {
@@ -619,57 +695,25 @@ export default function SplitView({
     };
 
     const handleMouseUp = () => {
-      // Snap drag zone dividers to grid on release for clean alignment
-      if (activeDragZone) {
-        const [win1Id, win2Id] = activeDragZone.affectedWindows;
-        const win1 = visibleWindows.find(w => w.id === win1Id);
-        const win2 = visibleWindows.find(w => w.id === win2Id);
-        
-        if (win1 && win2) {
-          if (activeDragZone.type === 'vertical') {
-            const currentPosition = win1.x + win1.width;
-            const snappedPosition = snapToGrid(currentPosition);
-            if (snappedPosition !== currentPosition) {
-              const dividerDelta = snappedPosition - currentPosition;
-              const threshold = 0.02;
-              const win1RightEdge = win1.x + win1.width;
-              const leftColumnWindows = visibleWindows.filter(w => 
-                Math.abs((w.x + w.width) - win1RightEdge) < threshold
-              );
-              const win2LeftEdge = win2.x;
-              const rightColumnWindows = visibleWindows.filter(w => 
-                Math.abs(w.x - win2LeftEdge) < threshold
-              );
-              leftColumnWindows.forEach(w => {
-                onLayoutChange(w.id, { x: w.x, y: w.y, width: w.width + dividerDelta, height: w.height });
-              });
-              rightColumnWindows.forEach(w => {
-                onLayoutChange(w.id, { x: w.x + dividerDelta, y: w.y, width: w.width - dividerDelta, height: w.height });
-              });
-            }
-          } else {
-            const currentPosition = win1.y + win1.height;
-            const snappedPosition = snapToGrid(currentPosition);
-            if (snappedPosition !== currentPosition) {
-              const dividerDelta = snappedPosition - currentPosition;
-              const threshold = 0.02;
-              const win1BottomEdge = win1.y + win1.height;
-              const topRowWindows = visibleWindows.filter(w => 
-                Math.abs((w.y + w.height) - win1BottomEdge) < threshold
-              );
-              const win2TopEdge = win2.y;
-              const bottomRowWindows = visibleWindows.filter(w => 
-                Math.abs(w.y - win2TopEdge) < threshold
-              );
-              topRowWindows.forEach(w => {
-                onLayoutChange(w.id, { x: w.x, y: w.y, width: w.width, height: w.height + dividerDelta });
-              });
-              bottomRowWindows.forEach(w => {
-                onLayoutChange(w.id, { x: w.x, y: w.y + dividerDelta, width: w.width, height: w.height - dividerDelta });
-              });
-            }
-          }
-        }
+      // Apply divider preview to actual layouts on mouseup
+      if (activeDragZone && dividerPreview) {
+        const [win1Id, win2Id] = dividerPreview.affectedWindows;
+
+        // Apply snapping to final position
+        const snappedPosition = snapToGrid(dividerPreview.position);
+
+        // Calculate final layouts with snapped position
+        const layouts = dividerPreview.type === 'vertical'
+          ? calculateVerticalDividerLayouts(snappedPosition, win1Id, win2Id, visibleWindows)
+          : calculateHorizontalDividerLayouts(snappedPosition, win1Id, win2Id, visibleWindows);
+
+        // Apply all layout changes (isDragging=false to allow resize)
+        layouts.forEach((layout, windowId) => {
+          onLayoutChange(windowId, layout, false);
+        });
+
+        // Clear preview state
+        setDividerPreview(null);
       }
       
       if (dropTarget && dragging && !activeDropZone) {
@@ -703,13 +747,21 @@ export default function SplitView({
       setActiveDragZone(null);
       setSnapGuides({});
       setDropTarget(null);
+      setDividerPreview(null); // Clear divider preview
+
+      // Clear drag idle timer on mouseup
+      if (dragIdleTimerRef.current) {
+        clearTimeout(dragIdleTimerRef.current);
+        dragIdleTimerRef.current = null;
+      }
       setDropZones([]);
       setActiveDropZone(null);
       setFlushGroup(new Set());
       
-      requestAnimationFrame(() => {
+      // Trigger resize after drag/resize complete (single batch resize)
+      setTimeout(() => {
         resizeCoordinator?.triggerResize();
-      });
+      }, 100); // Small delay to ensure all layout updates have settled
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -718,7 +770,7 @@ export default function SplitView({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragging, resizing, activeDragZone, dropTarget, activeDropZone, visibleWindows, onLayoutChange, handleWindowSwap, calculateDropZones, findFlushWindows]);
+  }, [dragging, resizing, activeDragZone, dropTarget, activeDropZone, visibleWindows, onLayoutChange, handleWindowSwap, calculateDropZones, findFlushWindows, dividerPreview, calculateVerticalDividerLayouts, calculateHorizontalDividerLayouts, resizeCoordinator]);
 
   if (isMobile) {
     const activeWindow = visibleWindows.find(w => w.id === mobileActiveTab) || visibleWindows[0];
@@ -847,7 +899,24 @@ export default function SplitView({
           onMouseDown={(e) => handleDragZoneStart(e, zone)}
         />
       ))}
-      
+
+      {/* Visual preview divider during drag */}
+      {dividerPreview && (
+        <div
+          className="absolute bg-[#00d4ff]/50 pointer-events-none"
+          style={{
+            [dividerPreview.type === 'vertical' ? 'left' : 'top']: `${dividerPreview.position * 100}%`,
+            [dividerPreview.type === 'vertical' ? 'top' : 'left']: '0',
+            [dividerPreview.type === 'vertical' ? 'width' : 'height']: '3px',
+            [dividerPreview.type === 'vertical' ? 'height' : 'width']: '100%',
+            transform: dividerPreview.type === 'vertical' ? 'translateX(-1.5px)' : 'translateY(-1.5px)',
+            zIndex: 1001,
+            boxShadow: '0 0 8px rgba(0, 212, 255, 0.6)',
+            transition: 'none', // Instant update for smooth 60fps drag
+          }}
+        />
+      )}
+
       {dragging && dropTarget && dropZones.map((zone, i) => {
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return null;
