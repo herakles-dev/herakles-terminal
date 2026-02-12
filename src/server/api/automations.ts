@@ -11,10 +11,10 @@ interface AuthenticatedRequest extends Request {
 }
 
 export function automationRoutes(
-  store: SessionStore, 
+  store: SessionStore,
   automationEngine?: AutomationEngine,
-  windowManager?: WindowManager,
-  connectionManager?: ConnectionManager
+  _windowManager?: WindowManager,
+  _connectionManager?: ConnectionManager
 ): Router {
   const router = Router();
 

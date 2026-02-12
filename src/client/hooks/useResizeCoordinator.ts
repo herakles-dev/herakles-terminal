@@ -45,8 +45,45 @@ const MIN_COLS = RESIZE_CONSTANTS.minCols;
 const MIN_ROWS = RESIZE_CONSTANTS.minRows;
 const COALESCE_DEBOUNCE_MS = 100;
 const RESIZE_TIMEOUT_MS = 3000;
-// Tolerance in pixels for canvas dimension mismatch detection
 const CANVAS_DIMENSION_TOLERANCE = 2;
+const TRANSITION_WAIT_TIMEOUT_MS = 300;
+const CANVAS_VERIFY_MAX_RETRIES = 3;
+const CANVAS_VERIFY_DELAYS = [16, 32, 64];
+
+/**
+ * Verify WebGL canvas dimensions with retry and exponential backoff.
+ * Returns true if canvas is properly synced after all retries.
+ */
+async function verifyWebGLCanvasSyncWithRetry(
+  termElement: HTMLElement | null,
+  fitAddon: FitAddon,
+  isRecovering?: () => boolean
+): Promise<boolean> {
+  if (!termElement) return true;
+
+  for (let attempt = 0; attempt < CANVAS_VERIFY_MAX_RETRIES; attempt++) {
+    if (verifyWebGLCanvasSync(termElement)) {
+      return true;
+    }
+
+    if (isRecovering?.()) return true; // Abort if recovery started
+
+    const delay = CANVAS_VERIFY_DELAYS[attempt] ?? 64;
+    await new Promise(resolve => setTimeout(resolve, delay));
+
+    if (isRecovering?.()) return true;
+
+    try {
+      fitAddon.fit();
+    } catch {
+      // Silently ignore fit failures during retry
+    }
+  }
+
+  // All retries exhausted
+  console.warn(`[ResizeCoordinator] Canvas sync failed after ${CANVAS_VERIFY_MAX_RETRIES} retries`);
+  return false;
+}
 
 /**
  * FIX WG-1: Verify WebGL canvas dimensions match container
@@ -118,83 +155,94 @@ export function useResizeCoordinator() {
     }
   }, []);
 
-  const performAtomicResize = useCallback((target: ResizeTarget) => {
+  const performAtomicResize = useCallback((target: ResizeTarget, immediate = false) => {
     // FIX RS-2: Skip resize if terminal is recovering from WebGL context loss
     if (target.isRecovering?.()) {
       console.debug(`[ResizeCoordinator] Skipping resize for ${target.id} - recovery in progress`);
       return;
     }
 
-    // FIX RS-1: Wait for CSS paint with double RAF
-    // This prevents black screen where WebGL canvas hasn't resized yet
-    // First RAF: queues callback for next frame
-    // Second RAF: ensures CSS transitions have completed and browser has painted
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        // FIX RS-2: Double-check recovery status after RAF delay
-        // Recovery might have started during the RAF delay
-        if (target.isRecovering?.()) {
-          console.debug(`[ResizeCoordinator] Aborting resize for ${target.id} - recovery started during RAF`);
+    const executeResize = async () => {
+      if (target.isRecovering?.()) {
+        console.debug(`[ResizeCoordinator] Aborting resize for ${target.id} - recovery started during wait`);
+        return;
+      }
+
+      try {
+        const dims = target.fitAddon.proposeDimensions();
+        if (!dims || dims.cols < MIN_COLS || dims.rows < MIN_ROWS) {
           return;
         }
 
-        try {
-          const dims = target.fitAddon.proposeDimensions();
-          if (!dims || dims.cols < MIN_COLS || dims.rows < MIN_ROWS) {
-            return;
-          }
-
-          const pending = pendingResizesRef.current.get(target.id);
-          if (pending && pending.cols === dims.cols && pending.rows === dims.rows) {
-            return;
-          }
-
-          target.fitAddon.fit();
-
-          // FIX WG-1: Verify WebGL canvas dimensions after fit
-          // If canvas didn't resize to match container, schedule another fit
-          const termElement = target.getTermElement?.() ||
-            document.querySelector(`[data-terminal-id="${target.id}"]`) as HTMLElement | null;
-
-          if (termElement && !verifyWebGLCanvasSync(termElement)) {
-            // Canvas dimensions don't match - try one more fit after next paint
-            requestAnimationFrame(() => {
-              if (target.isRecovering?.()) return; // Abort if recovery started
-              try {
-                target.fitAddon.fit();
-                // Log if retry also failed
-                if (!verifyWebGLCanvasSync(termElement)) {
-                  console.warn(`[ResizeCoordinator] Canvas sync still mismatched after retry for ${target.id}`);
-                }
-              } catch {
-                // Silently ignore retry failures
-              }
-            });
-          }
-
-          if (target.onResize) {
-            const existingPending = pendingResizesRef.current.get(target.id);
-            if (existingPending) {
-              clearTimeout(existingPending.timeoutId);
-            }
-
-            const timeoutId = setTimeout(() => {
-              pendingResizesRef.current.delete(target.id);
-            }, RESIZE_TIMEOUT_MS);
-
-            pendingResizesRef.current.set(target.id, {
-              cols: dims.cols,
-              rows: dims.rows,
-              expiresAt: Date.now() + RESIZE_TIMEOUT_MS,
-              timeoutId,
-            });
-
-            target.onResize(dims.cols, dims.rows);
-          }
-
-        } catch (e) {
-          console.warn(`[ResizeCoordinator] Atomic resize failed for ${target.id}:`, e);
+        const pending = pendingResizesRef.current.get(target.id);
+        if (pending && pending.cols === dims.cols && pending.rows === dims.rows) {
+          return;
         }
+
+        target.fitAddon.fit();
+
+        // Verify WebGL canvas dimensions match container (awaited, not fire-and-forget)
+        const termElement = target.getTermElement?.() ||
+          document.querySelector(`[data-terminal-id="${target.id}"]`) as HTMLElement | null;
+
+        if (termElement) {
+          await verifyWebGLCanvasSyncWithRetry(termElement, target.fitAddon, target.isRecovering);
+        }
+
+        if (target.onResize) {
+          const existingPending = pendingResizesRef.current.get(target.id);
+          if (existingPending) {
+            clearTimeout(existingPending.timeoutId);
+          }
+
+          const timeoutId = setTimeout(() => {
+            pendingResizesRef.current.delete(target.id);
+          }, RESIZE_TIMEOUT_MS);
+
+          pendingResizesRef.current.set(target.id, {
+            cols: dims.cols,
+            rows: dims.rows,
+            expiresAt: Date.now() + RESIZE_TIMEOUT_MS,
+            timeoutId,
+          });
+
+          target.onResize(dims.cols, dims.rows);
+        }
+
+      } catch (e) {
+        console.warn(`[ResizeCoordinator] Atomic resize failed for ${target.id}:`, e);
+      }
+    };
+
+    // Wait for CSS transitions to settle, then execute resize in RAF
+    const termElement = target.getTermElement?.() ||
+      document.querySelector(`[data-terminal-id="${target.id}"]`) as HTMLElement | null;
+
+    if (!immediate && termElement) {
+      // Check for active CSS transitions
+      const style = getComputedStyle(termElement);
+      const duration = style.transitionDuration;
+      const hasTransition = duration && duration !== '0s' && duration !== 'none';
+
+      if (hasTransition) {
+        // Wait for transition to end, then resize
+        let resolved = false;
+        const done = () => {
+          if (resolved) return;
+          resolved = true;
+          termElement.removeEventListener('transitionend', done);
+          requestAnimationFrame(() => executeResize());
+        };
+        termElement.addEventListener('transitionend', done, { once: true });
+        setTimeout(done, TRANSITION_WAIT_TIMEOUT_MS);
+        return;
+      }
+    }
+
+    // No transitions or immediate mode: use double-RAF for CSS paint
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        executeResize();
       });
     });
   }, []);
@@ -221,26 +269,23 @@ export function useResizeCoordinator() {
     };
   }, [performAtomicResize]);
 
-  const triggerResize = useCallback(() => {
+  /**
+   * Trigger resize for all registered targets.
+   * @param immediate - Skip debounce (used for initial setup, post-recovery).
+   *                    When immediate, also skips CSS transition waiting.
+   */
+  const triggerResize = useCallback((immediate = false) => {
     if (animationStateRef.current.isAnimating) {
       animationStateRef.current.pendingResize = true;
       return;
     }
 
-    if (resizeTimeoutRef.current) {
-      clearTimeout(resizeTimeoutRef.current);
-    }
-
-    resizeTimeoutRef.current = setTimeout(() => {
-      resizeTimeoutRef.current = null;
-
+    const doResizeAll = () => {
       if (animationStateRef.current.isAnimating) {
         animationStateRef.current.pendingResize = true;
         return;
       }
 
-      // FIX: Batch-level lock prevents concurrent resize batches
-      // (e.g., layout drag + browser resize firing simultaneously)
       if (isResizingRef.current) {
         return;
       }
@@ -249,14 +294,42 @@ export function useResizeCoordinator() {
       requestAnimationFrame(() => {
         const targets = Array.from(targetsRef.current.values());
         for (const target of targets) {
-          performAtomicResize(target);
+          performAtomicResize(target, immediate);
         }
-        // Release lock after next RAF to ensure all paints complete
-        requestAnimationFrame(() => {
+        // Release lock after current microtask queue drains (same frame, after all sync resize work)
+        Promise.resolve().then(() => {
           isResizingRef.current = false;
         });
       });
-    }, COALESCE_DEBOUNCE_MS);
+    };
+
+    if (immediate) {
+      // Skip debounce for initial setup, recovery, etc.
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+        resizeTimeoutRef.current = null;
+      }
+      doResizeAll();
+    } else {
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = setTimeout(() => {
+        resizeTimeoutRef.current = null;
+        doResizeAll();
+      }, COALESCE_DEBOUNCE_MS);
+    }
+  }, [performAtomicResize]);
+
+  /**
+   * Trigger an immediate resize for a specific target by ID.
+   * Used by TerminalCore after fontSize changes and post-recovery.
+   */
+  const resizeTarget = useCallback((targetId: string, immediate = false) => {
+    const target = targetsRef.current.get(targetId);
+    if (target) {
+      performAtomicResize(target, immediate);
+    }
   }, [performAtomicResize]);
 
   const setAnimating = useCallback((animating: boolean) => {
@@ -279,11 +352,16 @@ export function useResizeCoordinator() {
     };
   }, []);
 
+  // Wrap triggerResize for use as event listener (browser resize passes Event, not boolean)
+  const handleBrowserResize = useCallback(() => {
+    triggerResize(false);
+  }, [triggerResize]);
+
   useEffect(() => {
-    window.addEventListener('resize', triggerResize, { passive: true });
+    window.addEventListener('resize', handleBrowserResize, { passive: true });
 
     return () => {
-      window.removeEventListener('resize', triggerResize);
+      window.removeEventListener('resize', handleBrowserResize);
 
       if (resizeTimeoutRef.current) {
         clearTimeout(resizeTimeoutRef.current);
@@ -291,11 +369,12 @@ export function useResizeCoordinator() {
       pendingResizesRef.current.forEach(pending => clearTimeout(pending.timeoutId));
       pendingResizesRef.current.clear();
     };
-  }, [triggerResize]);
+  }, [handleBrowserResize]);
 
   return {
     register,
     triggerResize,
+    resizeTarget,
     isResizeLocked,
     isResizePending,
     confirmResize,

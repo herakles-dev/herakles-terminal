@@ -14,6 +14,7 @@ import type { ServerMessage } from '../../shared/types.js';
 import { todoManager } from '../todo/TodoManager.js';
 import { todoFileWatcher } from '../todo/TodoFileWatcher.js';
 import { contextManager } from '../context/ContextManager.js';
+import { OutputRingBuffer } from '../window/OutputRingBuffer.js';
 
 interface Connection {
   id: string;
@@ -53,6 +54,7 @@ export class ConnectionManager {
   private commandBuffers: Map<string, string> = new Map();
   private windowSubscribeTimers: Map<string, NodeJS.Timeout> = new Map();
   private cronsInitializedForUsers: Set<string> = new Set();
+  private outputRingBuffers: Map<string, OutputRingBuffer> = new Map();
 
   constructor(
     store: SessionStore,
@@ -163,6 +165,15 @@ export class ConnectionManager {
         deviceId,
       });
     });
+  }
+
+  private getOrCreateRingBuffer(windowId: string): OutputRingBuffer {
+    let buffer = this.outputRingBuffers.get(windowId);
+    if (!buffer) {
+      buffer = new OutputRingBuffer();
+      this.outputRingBuffers.set(windowId, buffer);
+    }
+    return buffer;
   }
 
   handleConnection(ws: WebSocket, meta: ConnectionMeta): void {
@@ -357,6 +368,10 @@ export class ConnectionManager {
 
       case 'todo:unsubscribe':
         this.handleTodoUnsubscribe(connection, (message as any).windowId);
+        break;
+
+      case 'window:replay':
+        this.handleWindowReplay(connection, (message as any).windowId, (message as any).afterSeq);
         break;
 
       case 'context:subscribe':
@@ -613,8 +628,13 @@ export class ConnectionManager {
       await this.windowManager.closeWindow(windowId, connection.user.email);
       connection.windowSubscriptions.delete(windowId);
 
-      // Clean up listener state when window closes
+      // Clean up listener state and ring buffer when window closes
       this.windowListenerStates.delete(windowId);
+      const ringBuffer = this.outputRingBuffers.get(windowId);
+      if (ringBuffer) {
+        ringBuffer.clear();
+        this.outputRingBuffers.delete(windowId);
+      }
 
       this.auditLogger.logWindowClose({
         windowId,
@@ -654,19 +674,32 @@ export class ConnectionManager {
     }
   }
 
+  // Server-side resize deduplication: coalesce rapid resize events
+  private pendingResizes = new Map<string, { cols: number; rows: number; seq?: number; timer: ReturnType<typeof setTimeout>; connection: Connection }>();
+
   private async handleWindowResize(connection: Connection, windowId: string, cols: number, rows: number, seq?: number): Promise<void> {
-    try {
-      const result = await this.windowManager.resizeWindow(windowId, cols, rows, connection.user.email);
-      this.send(connection.ws, {
-        type: 'window:resized',
-        windowId,
-        cols: result.cols,
-        rows: result.rows,
-        seq,
-      });
-    } catch (error) {
-      console.error(`Resize error for window ${windowId}:`, error);
+    const existing = this.pendingResizes.get(windowId);
+    if (existing) {
+      clearTimeout(existing.timer);
     }
+
+    const timer = setTimeout(async () => {
+      this.pendingResizes.delete(windowId);
+      try {
+        const result = await this.windowManager.resizeWindow(windowId, cols, rows, connection.user.email);
+        this.send(connection.ws, {
+          type: 'window:resized',
+          windowId,
+          cols: result.cols,
+          rows: result.rows,
+          seq,
+        });
+      } catch (error) {
+        console.error(`Resize error for window ${windowId}:`, error);
+      }
+    }, 50);
+
+    this.pendingResizes.set(windowId, { cols, rows, seq, timer, connection });
   }
 
   private async handleWindowLayout(connection: Connection, message: { windowId: string; x: number; y: number; width: number; height: number }): Promise<void> {
@@ -716,6 +749,50 @@ export class ConnectionManager {
     }, 300);
 
     this.windowSubscribeTimers.set(timerKey, timer);
+  }
+
+  private handleWindowReplay(connection: Connection, windowId: string, afterSeq: number): void {
+    if (!windowId) return;
+
+    const ringBuffer = this.outputRingBuffers.get(windowId);
+    if (!ringBuffer) {
+      // No buffer exists - nothing to replay
+      this.send(connection.ws, {
+        type: 'window:replay-response',
+        windowId,
+        data: '',
+        fromSeq: afterSeq,
+        toSeq: afterSeq,
+      });
+      return;
+    }
+
+    const result = ringBuffer.getAfter(afterSeq);
+    if (result === null) {
+      // Data was evicted from buffer - client needs a full restore
+      // Send empty replay-response; the client will have already received a restore
+      console.warn(`[ConnectionManager] Replay gap for window ${windowId}: requested seq ${afterSeq}, oldest available ${ringBuffer.getStats().oldestSeq}`);
+      this.send(connection.ws, {
+        type: 'window:replay-response',
+        windowId,
+        data: '',
+        fromSeq: afterSeq,
+        toSeq: afterSeq,
+      });
+      return;
+    }
+
+    if (result.data) {
+      console.info(`[ConnectionManager] Replaying ${result.data.length} bytes for window ${windowId} (seq ${result.fromSeq}-${result.toSeq})`);
+    }
+
+    this.send(connection.ws, {
+      type: 'window:replay-response',
+      windowId,
+      data: result.data,
+      fromSeq: result.fromSeq,
+      toSeq: result.toSeq,
+    });
   }
 
   private handleWindowRename(connection: Connection, windowId: string, name: string): void {
@@ -920,10 +997,15 @@ export class ConnectionManager {
         state.registered = true;
 
         pty.onData((data) => {
+          // Buffer data in ring buffer and get sequence number
+          const ringBuffer = this.getOrCreateRingBuffer(windowId);
+          const seq = ringBuffer.append(data);
+
           this.broadcastToWindow(windowId, {
             type: 'window:output',
             windowId,
             data,
+            seq,
           });
 
           // Get any active connection for this window to check automation
@@ -1056,6 +1138,8 @@ export class ConnectionManager {
     this.connections.clear();
     this.windowListenerStates.clear();
     this.cronsInitializedForUsers.clear();
+    this.outputRingBuffers.forEach(buf => buf.clear());
+    this.outputRingBuffers.clear();
   }
 
   broadcastToAll(message: ServerMessage): void {

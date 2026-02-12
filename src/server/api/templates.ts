@@ -8,286 +8,351 @@ interface AuthenticatedRequest extends Request {
 }
 
 export const BUILT_IN_TEMPLATES = [
+  // --- V9 Project Initialization ---
   {
-    id: 'git-status',
-    name: 'Git Status',
-    category: 'git',
-    command: 'git status',
-    description: 'Show working tree status',
+    id: 'v9-start-simple',
+    name: 'Quick Start',
+    category: 'v9-start',
+    command: 'I want to build a {{app_idea}}.',
+    description: 'Start a new project with a simple prompt',
+    variables: [{ name: 'app_idea', required: true, description: 'What do you want to build?' }],
     isBuiltIn: true,
   },
   {
-    id: 'git-pull',
-    name: 'Git Pull',
-    category: 'git',
-    command: 'git pull origin {{branch}}',
-    description: 'Pull changes from remote',
-    variables: [{ name: 'branch', default: 'main', description: 'Branch name' }],
-    isBuiltIn: true,
-  },
-  {
-    id: 'git-commit',
-    name: 'Git Commit',
-    category: 'git',
-    command: 'git add -A && git commit -m "{{message}}"',
-    description: 'Stage all and commit',
-    variables: [{ name: 'message', required: true, description: 'Commit message' }],
-    isBuiltIn: true,
-  },
-  {
-    id: 'git-diff',
-    name: 'Git Diff',
-    category: 'git',
-    command: 'git diff',
-    description: 'Show unstaged changes',
-    isBuiltIn: true,
-  },
-  {
-    id: 'git-log',
-    name: 'Git Log',
-    category: 'git',
-    command: 'git log --oneline -{{count}}',
-    description: 'Show recent commits',
-    variables: [{ name: 'count', default: '10', description: 'Number of commits' }],
-    isBuiltIn: true,
-  },
-  {
-    id: 'git-branch',
-    name: 'Git Branch',
-    category: 'git',
-    command: 'git branch -a',
-    description: 'List all branches',
-    isBuiltIn: true,
-  },
-  {
-    id: 'git-checkout',
-    name: 'Git Checkout',
-    category: 'git',
-    command: 'git checkout {{branch}}',
-    description: 'Switch branches',
-    variables: [{ name: 'branch', required: true, description: 'Branch name' }],
-    isBuiltIn: true,
-  },
-  {
-    id: 'docker-ps',
-    name: 'Docker List',
-    category: 'docker',
-    command: 'docker ps --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"',
-    description: 'List running containers',
-    isBuiltIn: true,
-  },
-  {
-    id: 'docker-logs',
-    name: 'Docker Logs',
-    category: 'docker',
-    command: 'docker logs {{container}} --tail {{lines}}',
-    description: 'View container logs',
+    id: 'v9-start-detailed',
+    name: 'Detailed Start',
+    category: 'v9-start',
+    command: 'I want to build a {{app_name}}.\nStack: {{stack}}.\nPort: {{port}}. Domain: {{domain}}.\nMust have: {{requirements}}.',
+    description: 'Start with full project specification',
     variables: [
-      { name: 'container', required: true, description: 'Container name' },
-      { name: 'lines', default: '100', description: 'Number of lines' },
+      { name: 'app_name', required: true, description: 'Application name' },
+      { name: 'stack', required: true, description: 'Tech stack (e.g., React + Node, Python Flask)' },
+      { name: 'port', default: 'auto', description: 'Port number' },
+      { name: 'domain', default: 'auto', description: 'Subdomain' },
+      { name: 'requirements', required: true, description: 'Key requirements' },
     ],
     isBuiltIn: true,
   },
   {
-    id: 'docker-restart',
-    name: 'Docker Restart',
-    category: 'docker',
-    command: 'docker restart {{container}}',
-    description: 'Restart a container',
-    variables: [{ name: 'container', required: true, description: 'Container name' }],
+    id: 'v9-start-migrate',
+    name: 'Migrate V8 to V9',
+    category: 'v9-start',
+    command: 'Migrate the V8 project {{project_name}} to V9 standards.',
+    description: 'Upgrade a V8 project to V9 protocol',
+    variables: [{ name: 'project_name', required: true, description: 'Project name' }],
     isBuiltIn: true,
   },
   {
-    id: 'docker-exec',
-    name: 'Docker Exec',
-    category: 'docker',
-    command: 'docker exec -it {{container}} {{command}}',
-    description: 'Execute command in container',
+    id: 'v9-start-continue',
+    name: 'Continue Project',
+    category: 'v9-start',
+    command: 'Continue {{project_name}}.',
+    description: 'Resume work on an existing project',
+    variables: [{ name: 'project_name', required: true, description: 'Project name' }],
+    isBuiltIn: true,
+  },
+  // --- V9 Agent Formations ---
+  {
+    id: 'v9-form-feature',
+    name: 'Build Feature',
+    category: 'v9-formation',
+    command: 'Build the {{feature_name}} feature.',
+    description: 'Build a feature using the feature-impl formation',
+    variables: [{ name: 'feature_name', required: true, description: 'Feature to build' }],
+    isBuiltIn: true,
+  },
+  {
+    id: 'v9-form-force',
+    name: 'Force Formation',
+    category: 'v9-formation',
+    command: 'Use the {{formation}} formation to build {{feature_name}}.',
+    description: 'Explicitly choose a V9 formation',
     variables: [
-      { name: 'container', required: true, description: 'Container name' },
-      { name: 'command', default: '/bin/sh', description: 'Command to run' },
+      { name: 'formation', required: true, description: 'Formation: feature-impl, new-project, bug-investigation, security-review, perf-optimization, code-review' },
+      { name: 'feature_name', required: true, description: 'What to build' },
     ],
     isBuiltIn: true,
   },
   {
-    id: 'docker-compose-up',
-    name: 'Docker Compose Up',
-    category: 'docker',
-    command: 'docker-compose up -d',
-    description: 'Start services in background',
+    id: 'v9-form-newproject',
+    name: 'New Project Team',
+    category: 'v9-formation',
+    command: 'Start a new project for {{project_description}}.',
+    description: 'Spawn the new-project formation (architect + scaffolder + db-designer)',
+    variables: [{ name: 'project_description', required: true, description: 'Project description' }],
     isBuiltIn: true,
   },
   {
-    id: 'docker-compose-down',
-    name: 'Docker Compose Down',
-    category: 'docker',
-    command: 'docker-compose down',
-    description: 'Stop services',
+    id: 'v9-form-bug',
+    name: 'Bug Investigation',
+    category: 'v9-formation',
+    command: 'Something is broken in {{module}}, investigate.',
+    description: 'Spawn parallel hypothesis investigators',
+    variables: [{ name: 'module', required: true, description: 'Module or area that is broken' }],
     isBuiltIn: true,
   },
   {
-    id: 'npm-install',
-    name: 'NPM Install',
-    category: 'npm',
-    command: 'npm install',
-    description: 'Install dependencies',
+    id: 'v9-form-security',
+    name: 'Security Review',
+    category: 'v9-formation',
+    command: 'Run a security review on {{module}}.',
+    description: 'Spawn threat-modeler + scanner + fixer',
+    variables: [{ name: 'module', required: true, description: 'Module to review' }],
     isBuiltIn: true,
   },
   {
-    id: 'npm-dev',
-    name: 'NPM Dev',
-    category: 'npm',
-    command: 'npm run dev',
-    description: 'Start development server',
+    id: 'v9-form-review',
+    name: 'Code Review',
+    category: 'v9-formation',
+    command: 'Review this PR: {{pr_context}}.',
+    description: 'Spawn 3 reviewers: security, performance, coverage',
+    variables: [{ name: 'pr_context', required: true, description: 'PR number or description' }],
+    isBuiltIn: true,
+  },
+  // --- V9 Effort & Thinking ---
+  {
+    id: 'v9-effort-max',
+    name: 'Max Effort (Architecture)',
+    category: 'v9-effort',
+    command: 'Use max effort to design the architecture for {{module}}.',
+    description: 'Opus 4.6 extended thinking for architecture and security',
+    variables: [{ name: 'module', required: true, description: 'Module to architect' }],
     isBuiltIn: true,
   },
   {
-    id: 'npm-build',
-    name: 'NPM Build',
-    category: 'npm',
-    command: 'npm run build',
-    description: 'Build for production',
+    id: 'v9-effort-perf',
+    name: 'Performance Optimization',
+    category: 'v9-effort',
+    command: 'The {{endpoint}} endpoint is slow, optimize it.',
+    description: 'Trigger perf-optimization formation',
+    variables: [{ name: 'endpoint', required: true, description: 'Slow endpoint or module' }],
     isBuiltIn: true,
   },
   {
-    id: 'npm-test',
-    name: 'NPM Test',
-    category: 'npm',
-    command: 'npm test',
-    description: 'Run test suite',
+    id: 'v9-effort-plan',
+    name: 'Force Plan Mode',
+    category: 'v9-effort',
+    command: 'Plan the refactoring of the {{module}} module.',
+    description: 'Enter plan mode before implementation',
+    variables: [{ name: 'module', required: true, description: 'Module to refactor' }],
     isBuiltIn: true,
   },
   {
-    id: 'npm-add',
-    name: 'NPM Add Package',
-    category: 'npm',
-    command: 'npm install {{package}}',
-    description: 'Add a dependency',
-    variables: [{ name: 'package', required: true, description: 'Package name' }],
+    id: 'v9-effort-review',
+    name: 'Review Code',
+    category: 'v9-effort',
+    command: 'Review the code in {{path}}.',
+    description: 'Focused code review on a path',
+    variables: [{ name: 'path', required: true, description: 'File or directory path' }],
+    isBuiltIn: true,
+  },
+  // --- V9 Risk & Permissions ---
+  {
+    id: 'v9-auto-grant',
+    name: 'Grant Edit Access',
+    category: 'v9-autonomy',
+    command: 'Grant edit access to {{path}}.',
+    description: 'Elevate autonomy for a file pattern',
+    variables: [{ name: 'path', default: 'src/**', description: 'File glob pattern' }],
     isBuiltIn: true,
   },
   {
-    id: 'find-port',
-    name: 'Find Port',
-    category: 'system',
-    command: 'lsof -i :{{port}}',
-    description: 'Find process using port',
-    variables: [{ name: 'port', required: true, description: 'Port number' }],
+    id: 'v9-auto-slow',
+    name: 'Slow Down (A0)',
+    category: 'v9-autonomy',
+    command: 'Slow down.',
+    description: 'Reset to A0 — confirm everything',
     isBuiltIn: true,
   },
   {
-    id: 'kill-port',
-    name: 'Kill Port',
-    category: 'system',
-    command: 'kill -9 $(lsof -ti :{{port}})',
-    description: 'Kill process on port',
-    variables: [{ name: 'port', required: true, description: 'Port number' }],
+    id: 'v9-auto-status',
+    name: 'Show Task Progress',
+    category: 'v9-autonomy',
+    command: 'Status',
+    description: 'Show current task list and progress',
     isBuiltIn: true,
   },
   {
-    id: 'disk-usage',
-    name: 'Disk Usage',
-    category: 'system',
-    command: 'df -h',
-    description: 'Show disk usage',
+    id: 'v9-auto-handoff',
+    name: 'Generate Handoff',
+    category: 'v9-autonomy',
+    command: 'Generate context for a new window for project {{project_name}}.',
+    description: 'Create handoff context for session continuation',
+    variables: [{ name: 'project_name', required: true, description: 'Project name' }],
+    isBuiltIn: true,
+  },
+  // --- V9 Deployment & Ops ---
+  {
+    id: 'v9-deploy-service',
+    name: 'Deploy Service',
+    category: 'v9-deploy',
+    command: 'Deploy {{service_name}}.',
+    description: 'Deploy a service with pre-flight checks',
+    variables: [{ name: 'service_name', required: true, description: 'Service to deploy' }],
     isBuiltIn: true,
   },
   {
-    id: 'memory-usage',
-    name: 'Memory Usage',
-    category: 'system',
-    command: 'free -h',
-    description: 'Show memory usage',
+    id: 'v9-deploy-scaffold',
+    name: 'Scaffold Project',
+    category: 'v9-deploy',
+    command: 'cd /home/hercules/v9 && ./scripts/scaffold {{project_name}}',
+    description: 'Scaffold a new V9 project',
+    variables: [{ name: 'project_name', required: true, description: 'Project name' }],
     isBuiltIn: true,
   },
   {
-    id: 'top-processes',
-    name: 'Top Processes',
-    category: 'system',
-    command: 'ps aux --sort=-%mem | head -{{count}}',
-    description: 'Top processes by memory',
-    variables: [{ name: 'count', default: '10', description: 'Number of processes' }],
+    id: 'v9-deploy-migrate-v8',
+    name: 'Migrate V8 Project',
+    category: 'v9-deploy',
+    command: './scripts/migrate-v8 {{project_name}}',
+    description: 'Run V8 to V9 migration script',
+    variables: [{ name: 'project_name', required: true, description: 'Project name' }],
     isBuiltIn: true,
   },
   {
-    id: 'watch-logs',
-    name: 'Watch Logs',
-    category: 'system',
-    command: 'tail -f {{file}}',
-    description: 'Follow log file',
-    variables: [{ name: 'file', required: true, description: 'Log file path' }],
+    id: 'v9-deploy-hooks',
+    name: 'Copy V9 Hooks',
+    category: 'v9-deploy',
+    command: 'mkdir -p /home/hercules/{{project_name}}/.claude && cp /home/hercules/v9/templates/project-settings.json /home/hercules/{{project_name}}/.claude/settings.json',
+    description: 'Copy V9 hook configuration to a project',
+    variables: [{ name: 'project_name', required: true, description: 'Project name' }],
+    isBuiltIn: true,
+  },
+  // --- V9 CLI Scripts ---
+  {
+    id: 'v9-script-status',
+    name: 'Project Status',
+    category: 'v9-scripts',
+    command: './scripts/status {{project_name}}',
+    description: 'Check V9 project status',
+    variables: [{ name: 'project_name', default: '', description: 'Project name (blank for current)' }],
     isBuiltIn: true,
   },
   {
-    id: 'find-files',
-    name: 'Find Files',
-    category: 'system',
-    command: 'find . -name "{{pattern}}" -type f',
-    description: 'Find files by pattern',
-    variables: [{ name: 'pattern', required: true, description: 'File pattern (e.g., *.ts)' }],
+    id: 'v9-script-handoff',
+    name: 'Generate Handoff File',
+    category: 'v9-scripts',
+    command: './scripts/handoff {{project_name}}',
+    description: 'Generate handoff context file',
+    variables: [{ name: 'project_name', default: '', description: 'Project name (blank for current)' }],
     isBuiltIn: true,
   },
   {
-    id: 'grep-search',
-    name: 'Search in Files',
-    category: 'system',
-    command: 'grep -rn "{{pattern}}" {{path}}',
-    description: 'Search for pattern in files',
-    variables: [
-      { name: 'pattern', required: true, description: 'Search pattern' },
-      { name: 'path', default: '.', description: 'Search path' },
-    ],
+    id: 'v9-script-team',
+    name: 'Team Status',
+    category: 'v9-scripts',
+    command: './scripts/team-status',
+    description: 'Show active agent team status',
     isBuiltIn: true,
   },
   {
-    id: 'ssh-connect',
-    name: 'SSH Connect',
-    category: 'ssh',
-    command: 'ssh {{user}}@{{host}}',
-    description: 'SSH to remote host',
-    variables: [
-      { name: 'user', default: 'hercules', description: 'SSH user' },
-      { name: 'host', required: true, description: 'Remote host' },
-    ],
+    id: 'v9-script-effort',
+    name: 'Effort Advisor',
+    category: 'v9-scripts',
+    command: './scripts/effort-advisor "{{task_description}}"',
+    description: 'Get effort level recommendation for a task',
+    variables: [{ name: 'task_description', required: true, description: 'Task to analyze' }],
+    isBuiltIn: true,
+  },
+  // --- V9 Quick Reference ---
+  {
+    id: 'v9-tip-activate',
+    name: 'Activate V9',
+    category: 'v9-tips',
+    command: 'cd /home/hercules/v9 && claude',
+    description: 'Enter the V9 directory and start Claude',
     isBuiltIn: true,
   },
   {
-    id: 'claude-code',
-    name: 'Claude Code',
-    category: 'claude',
-    command: 'claude',
-    description: 'Start Claude Code CLI',
+    id: 'v9-tip-effort-ref',
+    name: 'Effort Level Reference',
+    category: 'v9-tips',
+    command: 'cat <<EOF\nV9 Effort Levels:\n  max    - Architecture, security, novel problems (Opus 4.6 extended thinking)\n  high   - Implementation, refactoring, reviews (Opus 4.6)\n  medium - Testing, validation, coordination (Sonnet 4.5)\n  low    - Formatting, linting, scanning (Haiku 4.5)\nUsage: "Use max effort to design the auth architecture"\nEOF',
+    description: 'Quick reference: V9 effort levels and model routing',
     isBuiltIn: true,
   },
   {
-    id: 'claude-resume',
-    name: 'Claude Resume',
-    category: 'claude',
-    command: 'claude --resume',
-    description: 'Resume previous Claude session',
+    id: 'v9-tip-formations-ref',
+    name: 'Formations Reference',
+    category: 'v9-tips',
+    command: 'cat <<EOF\nV9 Agent Formations:\n  feature-impl       - 4 teammates: backend, frontend, integrator, tester\n  new-project        - 3 teammates: architect, scaffolder, db-designer\n  bug-investigation  - 3 parallel hypothesis investigators\n  security-review    - threat-modeler + scanner + fixer\n  perf-optimization  - optimizer then tester (sequential)\n  code-review        - 3 reviewers: security, perf, coverage\nUsage: "Use the feature-impl formation to build search"\nEOF',
+    description: 'Quick reference: V9 agent formations and team compositions',
     isBuiltIn: true,
   },
   {
-    id: 'claude-project',
-    name: 'Claude in Project',
-    category: 'claude',
-    command: 'cd {{path}} && claude',
-    description: 'Start Claude in project directory',
-    variables: [{ name: 'path', required: true, description: 'Project path' }],
+    id: 'v9-tip-autonomy-ref',
+    name: 'Autonomy Level Reference',
+    category: 'v9-tips',
+    command: 'cat <<EOF\nV9 Autonomy Levels:\n  A0 (start)         - Confirms everything\n  A1 (5 successes)   - Same-category repeats\n  A2 (10 successes)  - Files matching your grants\n  A3 (25 successes)  - All medium-risk\n  A4 (explicit)      - Everything except high-risk\nCommands: "Grant edit access to src/**" / "Slow down"\nEOF',
+    description: 'Quick reference: V9 autonomy levels and escalation',
+    isBuiltIn: true,
+  },
+  // --- Claude Code Model Configuration ---
+  {
+    id: 'cc-model-opus',
+    name: 'Switch to Opus',
+    category: 'cc-model',
+    command: '/model opus',
+    description: 'Switch to Opus 4.6 for complex reasoning tasks',
     isBuiltIn: true,
   },
   {
-    id: 'claude-think',
-    name: 'Extended Thinking',
-    category: 'claude',
-    command: 'echo "think {{mode}} about {{topic}}" | claude',
-    description: 'Use extended thinking (think/hard/harder/ultra)',
-    variables: [
-      { name: 'mode', default: '', description: 'Thinking mode (blank/hard/harder/ultrathink)' },
-      { name: 'topic', required: true, description: 'What to think about' },
-    ],
+    id: 'cc-model-sonnet',
+    name: 'Switch to Sonnet',
+    category: 'cc-model',
+    command: '/model sonnet',
+    description: 'Switch to Sonnet 4.5 for daily coding tasks',
     isBuiltIn: true,
   },
+  {
+    id: 'cc-model-haiku',
+    name: 'Switch to Haiku',
+    category: 'cc-model',
+    command: '/model haiku',
+    description: 'Switch to Haiku 4.5 for fast, simple tasks',
+    isBuiltIn: true,
+  },
+  {
+    id: 'cc-model-opusplan',
+    name: 'Opus Plan Mode',
+    category: 'cc-model',
+    command: '/model opusplan',
+    description: 'Opus for planning, Sonnet for execution (hybrid)',
+    isBuiltIn: true,
+  },
+  {
+    id: 'cc-model-sonnet-1m',
+    name: 'Sonnet 1M Context',
+    category: 'cc-model',
+    command: '/model sonnet[1m]',
+    description: 'Sonnet with 1 million token context window for long sessions',
+    isBuiltIn: true,
+  },
+  {
+    id: 'cc-model-effort-low',
+    name: 'Effort: Low',
+    category: 'cc-model',
+    command: '/model opus\n# Then adjust effort slider to LOW\n# Or set: CLAUDE_CODE_EFFORT_LEVEL=low',
+    description: 'Fast and cheap — straightforward tasks, less thinking',
+    isBuiltIn: true,
+  },
+  {
+    id: 'cc-model-effort-high',
+    name: 'Effort: High',
+    category: 'cc-model',
+    command: '/model opus\n# Then adjust effort slider to HIGH\n# Or set: CLAUDE_CODE_EFFORT_LEVEL=high',
+    description: 'Deep reasoning — complex problems, max thinking (default)',
+    isBuiltIn: true,
+  },
+  {
+    id: 'cc-model-ref',
+    name: 'Model Config Reference',
+    category: 'cc-model',
+    command: 'cat <<EOF\nClaude Code Model Configuration\n\nAliases:\n  default   - Opus 4.6 (Max/Teams/Pro)\n  opus      - Opus 4.6 (complex reasoning)\n  sonnet    - Sonnet 4.5 (daily coding)\n  haiku     - Haiku 4.5 (fast/simple)\n  opusplan  - Opus for plans, Sonnet for execution\n  sonnet[1m] - Sonnet with 1M token context\n\nEffort Levels (Opus 4.6):\n  low    - Fast, less thinking\n  medium - Balanced\n  high   - Deep reasoning (default)\n\nSwitch: /model <alias>  |  claude --model <alias>\nEnv:    ANTHROPIC_MODEL=<alias>\n        CLAUDE_CODE_EFFORT_LEVEL=low|medium|high\n\nSubagent model: CLAUDE_CODE_SUBAGENT_MODEL=<model>\nPin versions:   ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6\n                ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-5-20250929\nEOF',
+    description: 'Quick reference: all model aliases, effort levels, and env vars',
+    isBuiltIn: true,
+  },
+  // --- Claude Meta-Prompts ---
   {
     id: 'claude-self-review',
     name: 'Self-Review Pattern',
@@ -541,57 +606,6 @@ export const BUILT_IN_TEMPLATES = [
     variables: [{ name: 'api', required: true, description: 'API to review' }],
     isBuiltIn: true,
   },
-  {
-    id: 'claude-create-hook',
-    name: 'Hooks Creation Wizard',
-    category: 'claude-automation',
-    command: 'cat <<EOF\nCreate hook for {{trigger}} event:\n1. Hook Type: {{hook_type}} (PreToolUse, PostToolUse, Stop, Notification)\n2. Matcher: What tools/events trigger this? (e.g., "Edit|Write")\n3. Action: What command to run? (with {file}, {tool}, {message} variables)\n4. Error Handling: Should failures block Claude? (true/false)\n5. Testing: Test command manually, then add to config\nOutput: JSON config for ~/.claude/hooks/config.json\nValidation: Show example trigger scenario\nEOF',
-    description: 'Meta-prompt: Create and test Claude Code hooks',
-    variables: [
-      { name: 'trigger', required: true, description: 'When should hook run? (e.g., "after editing files")' },
-      { name: 'hook_type', default: 'PostToolUse', description: 'Hook type (PreToolUse, PostToolUse, Stop)' },
-    ],
-    isBuiltIn: true,
-  },
-  {
-    id: 'claude-mcp-setup',
-    name: 'MCP Server Configuration',
-    category: 'claude-automation',
-    command: 'cat <<EOF\nSet up MCP server for {{service}}:\n1. Install: npm install -g @modelcontextprotocol/server-{{service}}\n2. Configure: Add to ~/.claude/mcp.json or .claude/mcp.json\n3. Scope: User-level or project-level?\n4. Permissions: What scopes needed? (read, write, admin)\n5. Test: Verify server accessible with mcp__{{service}}__* tools\n6. Usage Example: Show 3 common operations\nOutput: Complete mcp.json config + usage examples\nEOF',
-    description: 'Meta-prompt: Configure MCP server integration',
-    variables: [{ name: 'service', required: true, description: 'Service name (github, database, browser, etc.)' }],
-    isBuiltIn: true,
-  },
-  {
-    id: 'claude-generate-config',
-    name: 'CLAUDE.md Generator',
-    category: 'claude-automation',
-    command: 'cat <<EOF\nGenerate CLAUDE.md for {{project}}:\n1. Project Type: {{project_type}} (web app, library, microservice, CLI tool)\n2. Tech Stack: Detect from package.json, requirements.txt, go.mod\n3. Essential Sections:\n   - Commands (dev, test, build, lint, typecheck)\n   - Architecture (components, data flow, key patterns)\n   - Quality Gates (DoD checklist)\n   - Anti-Patterns (what NOT to do)\n4. Template Level: minimal (10 lines), standard (50 lines), comprehensive (150 lines)\n5. Output: Complete CLAUDE.md ready to save\nInclude: thinking directives, cost optimization, progressive disclosure\nEOF',
-    description: 'Meta-prompt: Generate project-specific CLAUDE.md',
-    variables: [
-      { name: 'project', required: true, description: 'Project name/path' },
-      { name: 'project_type', default: 'web app', description: 'Project type' },
-    ],
-    isBuiltIn: true,
-  },
-  {
-    id: 'claude-session-resume',
-    name: 'Session Continuation Briefing',
-    category: 'claude-session',
-    command: 'cat <<EOF\nResume work on {{task}}:\n1. Last Session Recap:\n   - What was accomplished?\n   - What was the next planned step?\n   - What blockers existed?\n2. Current State Verification:\n   - What files changed since last session?\n   - What tests pass/fail?\n   - What\'s deployed?\n3. Context Bridge:\n   - What happened since last session? (git log, changelog)\n   - What context is now outdated?\n   - What new information exists?\n4. Re-establish Direction:\n   - What\'s still relevant?\n   - What needs updating?\n   - What\'s the immediate next action?\nOutput: Refreshed context + clear next step\nEOF',
-    description: 'Meta-prompt: Resume multi-session work efficiently',
-    variables: [{ name: 'task', required: true, description: 'Task being resumed' }],
-    isBuiltIn: true,
-  },
-  {
-    id: 'claude-cost-audit',
-    name: 'Token Cost Audit',
-    category: 'claude-session',
-    command: 'cat <<EOF\nAudit session for cost optimization:\n1. Current Usage:\n   - Run !tokens and !cost commands\n   - Identify top token consumers (files read, context carried)\n2. Inefficiencies:\n   - Are you re-reading same files?\n   - Is context from previous tasks still loaded?\n   - Are you using wrong model tier? (Opus when Sonnet sufficient)\n3. Optimization Opportunities:\n   - Where can you use /clear?\n   - Which operations could use minimal context?\n   - What could be progressive disclosure?\n4. Recommendations:\n   - Immediate fixes (use /clear now)\n   - CLAUDE.md improvements\n   - Workflow changes\nGoal: Reduce costs by {{target}}%\nEOF',
-    description: 'Meta-prompt: Analyze and reduce token costs',
-    variables: [{ name: 'target', default: '50', description: 'Target cost reduction %' }],
-    isBuiltIn: true,
-  },
 ];
 
 export function templateRoutes(store: SessionStore): Router {
@@ -603,10 +617,12 @@ export function templateRoutes(store: SessionStore): Router {
     }
 
     const userTemplates = store.getTemplates(req.user.email);
-    
+    const hiddenIds = new Set(store.getHiddenTemplateIds(req.user.email));
+
     res.json({
       data: {
-        builtIn: BUILT_IN_TEMPLATES,
+        builtIn: BUILT_IN_TEMPLATES.filter(t => !hiddenIds.has(t.id)),
+        hidden: BUILT_IN_TEMPLATES.filter(t => hiddenIds.has(t.id)).map(t => ({ id: t.id, name: t.name, category: t.category })),
         custom: userTemplates.map(t => ({
           id: t.id,
           name: t.name,
@@ -644,15 +660,15 @@ export function templateRoutes(store: SessionStore): Router {
     const { name, category, command, description, variables } = req.body || {};
 
     if (!name || !command) {
-      return res.status(400).json({ 
-        error: { code: 'INVALID_INPUT', message: 'name and command are required' } 
+      return res.status(400).json({
+        error: { code: 'INVALID_INPUT', message: 'name and command are required' }
       });
     }
 
     const existingTemplates = store.getTemplates(req.user.email);
     if (existingTemplates.length >= 100) {
-      return res.status(400).json({ 
-        error: { code: 'MAX_TEMPLATES', message: 'Maximum 100 custom templates' } 
+      return res.status(400).json({
+        error: { code: 'MAX_TEMPLATES', message: 'Maximum 100 custom templates' }
       });
     }
 
@@ -701,7 +717,7 @@ export function templateRoutes(store: SessionStore): Router {
     });
 
     const updated = store.getTemplate(req.params.id, req.user.email);
-    
+
     res.json({
       data: {
         id: updated!.id,
@@ -729,6 +745,156 @@ export function templateRoutes(store: SessionStore): Router {
     res.json({ data: { success: true } });
   });
 
+  // --- Group Management ---
+
+  router.get('/groups', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    const builtInGroups = new Map<string, number>();
+    for (const t of BUILT_IN_TEMPLATES) {
+      builtInGroups.set(t.category, (builtInGroups.get(t.category) || 0) + 1);
+    }
+
+    const userGroups = store.getTemplateCategories(req.user.email);
+    const groups: { name: string; count: number; isBuiltIn: boolean }[] = [];
+
+    for (const [name, count] of builtInGroups) {
+      const userCount = userGroups.find(g => g.category === name)?.count || 0;
+      groups.push({ name, count: count + userCount, isBuiltIn: true });
+    }
+
+    for (const g of userGroups) {
+      if (!builtInGroups.has(g.category)) {
+        groups.push({ name: g.category, count: g.count, isBuiltIn: false });
+      }
+    }
+
+    groups.sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ data: groups });
+  });
+
+  router.put('/groups/:name', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    const oldName = req.params.name;
+    const { newName } = req.body || {};
+
+    if (!newName || typeof newName !== 'string' || !newName.trim()) {
+      return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'newName is required' } });
+    }
+
+    const builtInCategories = new Set(BUILT_IN_TEMPLATES.map(t => t.category));
+    if (builtInCategories.has(oldName)) {
+      return res.status(400).json({ error: { code: 'CANNOT_RENAME_BUILTIN', message: 'Cannot rename built-in categories' } });
+    }
+
+    const changed = store.renameTemplateCategory(req.user.email, oldName, newName.trim());
+    res.json({ data: { changed, oldName, newName: newName.trim() } });
+  });
+
+  router.delete('/groups/:name', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    const category = req.params.name;
+    const { action } = req.query;
+
+    const builtInCategories = new Set(BUILT_IN_TEMPLATES.map(t => t.category));
+    if (builtInCategories.has(category)) {
+      return res.status(400).json({ error: { code: 'CANNOT_DELETE_BUILTIN', message: 'Cannot delete built-in categories' } });
+    }
+
+    if (action === 'move') {
+      const changed = store.renameTemplateCategory(req.user.email, category, 'custom');
+      return res.json({ data: { action: 'moved', changed } });
+    }
+
+    const deleted = store.deleteTemplatesByCategory(req.user.email, category);
+    res.json({ data: { action: 'deleted', deleted } });
+  });
+
+  // --- Batch Operations ---
+
+  router.post('/batch-delete', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    const { templateIds } = req.body || {};
+    if (!Array.isArray(templateIds) || templateIds.length === 0) {
+      return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'templateIds array required' } });
+    }
+
+    const deleted = store.deleteTemplates(req.user.email, templateIds);
+    res.json({ data: { deleted } });
+  });
+
+  router.post('/batch-move', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    const { templateIds, category } = req.body || {};
+    if (!Array.isArray(templateIds) || templateIds.length === 0) {
+      return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'templateIds array required' } });
+    }
+    if (!category || typeof category !== 'string') {
+      return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'category is required' } });
+    }
+
+    const moved = store.moveTemplatesToCategory(req.user.email, templateIds, category);
+    res.json({ data: { moved, category } });
+  });
+
+  // --- Hide/Unhide Built-in Templates ---
+
+  router.post('/hide/:id', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+    store.hideTemplate(req.user.email, req.params.id);
+    res.json({ data: { hidden: true, templateId: req.params.id } });
+  });
+
+  router.post('/unhide/:id', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+    store.unhideTemplate(req.user.email, req.params.id);
+    res.json({ data: { hidden: false, templateId: req.params.id } });
+  });
+
+  router.post('/batch-hide', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+    const { templateIds } = req.body || {};
+    if (!Array.isArray(templateIds) || templateIds.length === 0) {
+      return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'templateIds array required' } });
+    }
+    let count = 0;
+    for (const id of templateIds) {
+      if (typeof id === 'string') {
+        store.hideTemplate(req.user.email, id);
+        count++;
+      }
+    }
+    res.json({ data: { hidden: count } });
+  });
+
+  router.post('/unhide-all', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+    const count = store.unhideAllTemplates(req.user.email);
+    res.json({ data: { restored: count } });
+  });
+
   router.post('/execute', (req: AuthenticatedRequest, res: Response) => {
     if (!req.user) {
       return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
@@ -737,8 +903,8 @@ export function templateRoutes(store: SessionStore): Router {
     const { templateId, variables } = req.body || {};
 
     if (!templateId) {
-      return res.status(400).json({ 
-        error: { code: 'INVALID_INPUT', message: 'templateId is required' } 
+      return res.status(400).json({
+        error: { code: 'INVALID_INPUT', message: 'templateId is required' }
       });
     }
 
@@ -764,12 +930,12 @@ export function templateRoutes(store: SessionStore): Router {
 
     let command = template.command;
     const templateVars = template.variables || [];
-    
+
     for (const varDef of templateVars) {
       const value = variables?.[varDef.name] ?? varDef.default;
       if (varDef.required && !value) {
-        return res.status(400).json({ 
-          error: { code: 'MISSING_VARIABLE', message: `Variable '${varDef.name}' is required` } 
+        return res.status(400).json({
+          error: { code: 'MISSING_VARIABLE', message: `Variable '${varDef.name}' is required` }
         });
       }
       command = command.replace(new RegExp(`{{${varDef.name}}}`, 'g'), value || '');

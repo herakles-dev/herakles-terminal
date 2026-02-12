@@ -300,9 +300,9 @@ describe('useRendererSetup', () => {
         const callback = addonInstance.onContextLoss.mock.calls[0][0];
         callback();
 
-        // Should enter recovering state
+        // Should enter context_lost state (new state machine)
         expect(onStateChange).toHaveBeenCalledWith(
-          expect.objectContaining({ status: 'recovering', attempts: 1 })
+          expect.objectContaining({ status: 'context_lost' })
         );
       }
 

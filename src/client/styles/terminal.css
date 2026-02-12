@@ -168,9 +168,8 @@ body {
 
 .terminal-container .xterm-viewport {
   background-color: var(--bg-secondary) !important;
-  overflow-y: auto !important;
+  overflow-y: hidden !important;
   touch-action: pan-y;
-  -webkit-overflow-scrolling: touch;
 }
 
 .terminal-container .xterm-viewport::-webkit-scrollbar {

@@ -9,7 +9,10 @@ export type RendererState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'active'; type: RendererType }
-  | { status: 'recovering'; attempts: number }
+  | { status: 'context_lost' }
+  | { status: 'disposing' }
+  | { status: 'reinitializing'; attempts: number }
+  | { status: 'validating' }
   | { status: 'failed'; lastError?: string };
 
 /**
@@ -170,49 +173,45 @@ export function useRendererSetup(
         // Report context loss to health monitor
         healthMonitor?.recordContextLoss();
 
-        if (recoveryAttemptsRef.current < MAX_RECOVERY_ATTEMPTS) {
-          recoveryAttemptsRef.current++;
-          setState({ status: 'recovering', attempts: recoveryAttemptsRef.current });
+        // STATE: CONTEXT_LOST - Immediately pause pipeline
+        setState({ status: 'context_lost' });
+        onRecoveryStart?.(terminalId);
 
-          // CRITICAL: Pause pipeline IMMEDIATELY - before any delay
-          // This prevents output from being written to the broken renderer
-          // which produces the dots/garbled output pattern
-          onRecoveryStart?.(terminalId);
-
-          setTimeout(() => {
-            if (mountedRef.current && term.element) {
-              webglAddon.dispose();
-              webglAddonRef.current = null;
-
-              // Clear buffer and reduce scrollback to free GPU memory before recovery
-              // This is critical - without clearing, the same OOM condition will recur
-              if (originalScrollbackRef.current === null) {
-                originalScrollbackRef.current = term.options.scrollback ?? 20000;
-              }
-
-              console.warn(`[${terminalId}] Clearing buffer and reducing scrollback (${originalScrollbackRef.current} → ${RECOVERY_SCROLLBACK_LIMIT}) for WebGL recovery`);
-
-              // Clear the terminal buffer to free GPU texture memory
-              term.clear();
-
-              // Reduce scrollback limit to prevent future OOM
-              term.options.scrollback = RECOVERY_SCROLLBACK_LIMIT;
-
-              // Attempt to reinitialize WebGL with reduced memory footprint
-              setupRenderer(term, true);
-            } else {
-              // Component unmounted during delay - notify recovery failed
-              onRecoveryEnd?.(terminalId, false);
-            }
-          }, 100 * recoveryAttemptsRef.current);
-        } else {
+        if (recoveryAttemptsRef.current >= MAX_RECOVERY_ATTEMPTS) {
           console.error(`[${terminalId}] WebGL context lost - max recovery attempts reached`);
           webglAddon.dispose();
           webglAddonRef.current = null;
           setState({ status: 'failed', lastError: 'WebGL context lost after max recovery attempts' });
-          // Notify that recovery failed
           onRecoveryEnd?.(terminalId, false);
+          return;
         }
+
+        recoveryAttemptsRef.current++;
+
+        // STATE: DISPOSING - Clean up old WebGL addon
+        setTimeout(() => {
+          if (!mountedRef.current || !term.element) {
+            onRecoveryEnd?.(terminalId, false);
+            return;
+          }
+
+          setState({ status: 'disposing' });
+          webglAddon.dispose();
+          webglAddonRef.current = null;
+
+          // Clear buffer and reduce scrollback to free GPU memory
+          if (originalScrollbackRef.current === null) {
+            originalScrollbackRef.current = term.options.scrollback ?? 20000;
+          }
+
+          console.warn(`[${terminalId}] Clearing buffer and reducing scrollback (${originalScrollbackRef.current} → ${RECOVERY_SCROLLBACK_LIMIT}) for WebGL recovery`);
+          term.clear();
+          term.options.scrollback = RECOVERY_SCROLLBACK_LIMIT;
+
+          // STATE: REINITIALIZING - Create new WebGL addon
+          setState({ status: 'reinitializing', attempts: recoveryAttemptsRef.current });
+          setupRenderer(term, true);
+        }, 100 * recoveryAttemptsRef.current);
       });
 
       // loadAddon throws synchronously if WebGL2 is not supported
@@ -273,15 +272,13 @@ export function useRendererSetup(
         return { success: false, rendererType: null, error };
       }
 
-      setState({ status: 'active', type: 'webgl' });
-
-      // Reset recovery counter after successful recovery
-      // This allows unlimited successful recoveries across the session lifetime
+      // STATE: VALIDATING (recovery) or ACTIVE (initial)
       if (isRecovery) {
+        setState({ status: 'validating' });
+
         recoveryAttemptsRef.current = 0;
         console.info(`[${terminalId}] WebGL recovery successful - counter reset`);
 
-        // Reset health monitor after successful recovery
         healthMonitor?.reset();
 
         // Restore original scrollback if health is good after recovery
@@ -290,42 +287,23 @@ export function useRendererSetup(
           if (postRecoveryHealth > 80) {
             console.info(`[${terminalId}] Health score ${postRecoveryHealth} > 80, restoring scrollback to ${originalScrollbackRef.current}`);
             term.options.scrollback = originalScrollbackRef.current;
-            originalScrollbackRef.current = null; // Reset so we re-capture on next loss
+            originalScrollbackRef.current = null;
           } else {
             console.warn(`[${terminalId}] Health score ${postRecoveryHealth} <= 80, keeping reduced scrollback (${RECOVERY_SCROLLBACK_LIMIT})`);
           }
         }
 
-        // FIX WG-3: Validate WebGL state after recovery
+        // Validate WebGL state
         const validation = validateWebGLState(term, terminalId);
         if (!validation.valid) {
           console.warn(`[${terminalId}] WebGL validation issues after recovery:`, validation.issues);
-          // Schedule a fit to attempt self-correction
-          // The resize coordinator will verify canvas dimensions
-          requestAnimationFrame(() => {
-            if (!mountedRef.current || !term.element) return;
-            try {
-              // Find FitAddon in loaded addons and trigger fit
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const addons = (term as any)._addonManager?._addons;
-              if (addons) {
-                for (const addon of addons) {
-                  if (addon?.instance?.fit && typeof addon.instance.fit === 'function') {
-                    addon.instance.fit();
-                    console.debug(`[${terminalId}] Post-recovery fit triggered`);
-                    break;
-                  }
-                }
-              }
-            } catch (e) {
-              console.warn(`[${terminalId}] Post-recovery fit failed:`, e);
-            }
-          });
         }
 
-        // Notify that recovery succeeded - pipeline can resume
+        // STATE: ACTIVE - recovery complete, pipeline can resume and request replay
+        setState({ status: 'active', type: 'webgl' });
         onRecoveryEnd?.(terminalId, true);
       } else {
+        setState({ status: 'active', type: 'webgl' });
         console.info(`[${terminalId}] WebGL renderer ACTIVE`);
       }
 

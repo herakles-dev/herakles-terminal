@@ -137,7 +137,8 @@ export type ClientMessageType =
   | 'window:resize'
   | 'window:layout'
   | 'window:subscribe'
-  | 'window:rename';
+  | 'window:rename'
+  | 'window:replay';
 
 export type ClientMessage =
   | { type: 'auth'; token: string; sessionId?: string }
@@ -153,7 +154,8 @@ export type ClientMessage =
   | { type: 'window:resize'; windowId: string; cols: number; rows: number; seq?: number }
   | { type: 'window:layout'; windowId: string; x: number; y: number; width: number; height: number }
   | { type: 'window:subscribe'; windowId: string }
-  | { type: 'window:rename'; windowId: string; name: string };
+  | { type: 'window:rename'; windowId: string; name: string }
+  | { type: 'window:replay'; windowId: string; afterSeq: number };
 
 export type ServerMessageType =
   | 'auth-success'
@@ -181,6 +183,7 @@ export type ServerMessageType =
   | 'device:disconnected'
   | 'automation:triggered'
   | 'automation:completed'
+  | 'window:replay-response'
   | 'file:uploaded'
   | 'file:deleted'
   | 'error';
@@ -199,11 +202,12 @@ export type ServerMessage =
   | { type: 'session:resumed'; session: Session; windows: Window[] }
   | { type: 'window:created'; window: Window }
   | { type: 'window:closed'; windowId: string }
-  | { type: 'window:output'; windowId: string; data: string }
+  | { type: 'window:output'; windowId: string; data: string; seq?: number }
   | { type: 'window:clear'; windowId: string }
   | { type: 'window:restore'; windowId: string; data: string }
   | { type: 'window:resized'; windowId: string; cols: number; rows: number; seq?: number; recapture?: string }
   | { type: 'window:list'; windows: Window[] }
+  | { type: 'window:replay-response'; windowId: string; data: string; fromSeq: number; toSeq: number }
   | { type: 'window:renamed'; windowId: string; name: string; autoName?: string }
   | { type: 'device:lock-acquired'; windowId: string; deviceId: string; expiresAt: number }
   | { type: 'device:lock-released'; windowId: string }

@@ -49,12 +49,12 @@
   .terminal-wrapper {
     flex: 1;
     min-height: 0;
-    contain: strict;
+    contain: layout style;
     overflow: hidden;
   }
   
   .terminal-container {
-    contain: strict;
+    contain: layout style;
     overflow: hidden;
   }
   
@@ -90,6 +90,14 @@
 }
 
 [data-viewport-stable="false"] {
+  .terminal-wrapper,
+  .terminal-container {
+    transition: none !important;
+  }
+}
+
+/* Suppress transitions during keyboard open/close */
+[data-keyboard-open="true"] {
   .terminal-wrapper,
   .terminal-container {
     transition: none !important;

@@ -8,6 +8,8 @@ export interface OutputPipelineConfig {
 // Maximum buffer size before truncation (512KB)
 // Prevents unbounded memory growth during recovery or when RAF is blocked
 const MAX_BUFFER_SIZE = 512 * 1024;
+// Backpressure threshold (percentage of MAX_BUFFER_SIZE)
+const BACKPRESSURE_HIGH_WATERMARK = 0.8; // 80% - request throttle
 
 // Volume-based throttling constants (Phase 2: bytes/sec instead of flushes/sec)
 // These thresholds correlate with GPU memory pressure better than frequency
@@ -26,6 +28,10 @@ interface WindowOutputState {
   pendingResizeBuffer: string;
   restoreInProgress: boolean;
   recoveryInProgress: boolean;
+  // Sequence tracking for replay after recovery/restore
+  lastProcessedSeq: number;
+  // Backpressure state
+  backpressureActive: boolean;
   // Volume-based throttling state (Phase 2)
   windowStartTime: number;
   bytesInWindow: number;
@@ -34,16 +40,36 @@ interface WindowOutputState {
 }
 
 export type FlushCallback = (windowId: string, data: string) => void;
+export type ReplayRequestCallback = (windowId: string, afterSeq: number) => void;
+export type BackpressureCallback = (windowId: string, throttle: boolean) => void;
 
 export class OutputPipelineManager {
   private windows: Map<string, WindowOutputState> = new Map();
   private onFlush: FlushCallback;
+  private onReplayRequest?: ReplayRequestCallback;
+  private onBackpressure?: BackpressureCallback;
   private healthMonitor?: WebGLHealthMonitor;
   private forcedThrottleMode?: 'light' | 'heavy' | 'critical';
 
   constructor(onFlush: FlushCallback, config?: OutputPipelineConfig) {
     this.onFlush = onFlush;
     this.healthMonitor = config?.healthMonitor;
+  }
+
+  /**
+   * Set callback for requesting replay from server.
+   * Called when exiting recovery/restore mode with a known last sequence.
+   */
+  setReplayRequestCallback(callback: ReplayRequestCallback): void {
+    this.onReplayRequest = callback;
+  }
+
+  /**
+   * Set callback for backpressure signaling.
+   * Called with throttle=true when buffer reaches 80%, throttle=false when it drops below 50%.
+   */
+  setBackpressureCallback(callback: BackpressureCallback): void {
+    this.onBackpressure = callback;
   }
 
   /**
@@ -80,6 +106,8 @@ export class OutputPipelineManager {
         pendingResizeBuffer: '',
         restoreInProgress: false,
         recoveryInProgress: false,
+        lastProcessedSeq: 0,
+        backpressureActive: false,
         windowStartTime: performance.now(),
         bytesInWindow: 0,
         flushCountInWindow: 0,
@@ -184,11 +212,23 @@ export class OutputPipelineManager {
       this.healthMonitor?.recordFlush(byteCount);
 
       this.onFlush(windowId, data);
+
+      // Release backpressure after flush if buffer was fully drained
+      // (buffer is now empty since we just cleared it)
+      if (state.backpressureActive) {
+        state.backpressureActive = false;
+        this.onBackpressure?.(windowId, false);
+      }
     }
   }
 
-  enqueue(windowId: string, data: string): void {
+  enqueue(windowId: string, data: string, seq?: number): void {
     const state = this.getOrCreateState(windowId);
+
+    // Track sequence number regardless of discard state
+    if (seq !== undefined && seq > state.lastProcessedSeq) {
+      state.lastProcessedSeq = seq;
+    }
 
     // Discard data during restore - restore handler writes directly to terminal
     if (state.restoreInProgress) {
@@ -218,6 +258,13 @@ export class OutputPipelineManager {
       const excess = state.buffer.length - MAX_BUFFER_SIZE;
       state.buffer = state.buffer.slice(excess);
       console.warn(`[OutputPipeline] ${windowId}: Buffer truncated, discarded ${excess} bytes`);
+    }
+
+    // Backpressure signaling
+    const bufferRatio = state.buffer.length / MAX_BUFFER_SIZE;
+    if (!state.backpressureActive && bufferRatio >= BACKPRESSURE_HIGH_WATERMARK) {
+      state.backpressureActive = true;
+      this.onBackpressure?.(windowId, true);
     }
 
     // Track bytes for throttle calculation (now tracks on enqueue, not just flush)
@@ -273,6 +320,9 @@ export class OutputPipelineManager {
       this.cancelFlushTimer(state);
       state.buffer = '';
       state.pendingResizeBuffer = '';
+    } else if (state.restoreInProgress && state.lastProcessedSeq > 0) {
+      // Exiting restore mode - request replay of missed data
+      this.requestReplay(windowId, state.lastProcessedSeq);
     }
 
     state.restoreInProgress = inProgress;
@@ -318,6 +368,10 @@ export class OutputPipelineManager {
       console.info(`[OutputPipeline] ${windowId}: Entering recovery mode, buffers cleared, resize flag reset`);
     } else {
       console.info(`[OutputPipeline] ${windowId}: Exiting recovery mode`);
+      // Exiting recovery mode - request replay of missed data
+      if (state.recoveryInProgress && state.lastProcessedSeq > 0) {
+        this.requestReplay(windowId, state.lastProcessedSeq);
+      }
     }
 
     state.recoveryInProgress = inProgress;
@@ -326,6 +380,47 @@ export class OutputPipelineManager {
   isRecoveryInProgress(windowId: string): boolean {
     const state = this.windows.get(windowId);
     return state?.recoveryInProgress ?? false;
+  }
+
+  /**
+   * Get the last processed sequence number for a window.
+   * Used by recovery handlers to know where to request replay from.
+   */
+  getLastProcessedSeq(windowId: string): number {
+    const state = this.windows.get(windowId);
+    return state?.lastProcessedSeq ?? 0;
+  }
+
+  /**
+   * Request replay of missed data from the server.
+   */
+  private requestReplay(windowId: string, afterSeq: number): void {
+    if (this.onReplayRequest && afterSeq > 0) {
+      console.info(`[OutputPipeline] ${windowId}: Requesting replay after seq ${afterSeq}`);
+      this.onReplayRequest(windowId, afterSeq);
+    }
+  }
+
+  /**
+   * Reset all state for a window. Called on WebSocket disconnect
+   * to prevent stale flags from blocking output on reconnect.
+   */
+  resetState(windowId: string): void {
+    const state = this.windows.get(windowId);
+    if (!state) return;
+
+    this.cancelFlushTimer(state);
+
+    state.buffer = '';
+    state.pendingResizeBuffer = '';
+    state.resizePending = false;
+    state.restoreInProgress = false;
+    state.recoveryInProgress = false;
+    state.throttleMode = 'normal';
+    state.bytesInWindow = 0;
+    state.flushCountInWindow = 0;
+    state.windowStartTime = performance.now();
+    // Preserve lastProcessedSeq for potential reconnect replay
   }
 
   clear(windowId: string): void {

@@ -1,43 +1,22 @@
-# Archived: Display Quality Refactor (January 2026)
+# 2026-01 Refactor Archive
 
-**Completed:** January 8, 2026
-**Duration:** 8-13 sessions (~56 hours)
-**Result:** All 6 phases complete ✅
+This archive contains documentation from the January 2026 terminal refactoring work, including display quality improvements, music player feature development, and initial stability fixes.
 
-## What Was Fixed
+## Contents
 
-This refactor addressed display quality issues in Zeus Terminal:
-- **Dotted lines after resize** - 95% reduction
-- **ANSI color corruption** - Eliminated
-- **Canvas renderer timing** - Fixed with MutationObserver
-- **Output buffering race conditions** - Consolidated into single pipeline
+### Implementation Plans
+- `TERMINAL_REFACTOR_PLAN.md` - Master refactoring plan
+- `CRITICAL_FIXES_GUIDE.md` - Critical bug fixes guide
+- `QUICK_FIX_CHECKLIST.md` - Quick fix checklist
+- `2026-01-ui-improvements-plan.md` - UI improvements planning
 
-## Phases Completed
+### Music Player Issues (Unresolved, Archived Jan 2026)
+- `2026-01-music-player-toggle-bug.md` - Toggle button not opening player
+- `music-resume-debug.md` - Resume state debugging
+- `MUSIC_SEARCH_RESULTS_NOT_VISIBLE.md` - Search results UI issue
 
-| Phase | Description | Outcome |
-|-------|-------------|---------|
-| 1 | Output Pipeline Consolidation | 3 buffer refs → 1 OutputPipelineManager |
-| 2 | Resize Coordination Simplification | 8 refs → 4 refs |
-| 3 | Renderer Lifecycle Refactor | MutationObserver + state machine |
-| 4 | Scrollback Optimization | Chunked capture, minimap throttling |
-| 5 | CSS Architecture Cleanup | Split into 3 modular files |
-| 6 | Theme System Enhancement | 6 themes, setTheme API |
+**Note**: Music player issues remain unresolved and were archived as part of February 2026 cleanup.
 
-## Files Created During Refactor
+## Status
 
-- `src/client/services/OutputPipelineManager.ts`
-- `src/client/services/__tests__/OutputPipelineManager.test.ts`
-- `src/client/styles/terminal-base.css`
-- `src/client/styles/terminal-xterm.css`
-- `src/client/styles/terminal-mobile.css`
-- `src/shared/themes.ts`
-
-## Archived Documents
-
-- `TERMINAL_REFACTOR_PLAN.md` - Detailed 6-phase plan with line-by-line implementation guide
-- `CRITICAL_FIXES_GUIDE.md` - Root cause analysis and fix documentation
-- `QUICK_FIX_CHECKLIST.md` - Step-by-step implementation checklist
-
-## Reference
-
-These documents are preserved for historical reference. The fixes are now part of the main codebase.
+Completed refactoring work that led to the terminal stability improvements implemented in February 2026. See `/docs/archive/2026-02-terminal-stability/` for the follow-up work.

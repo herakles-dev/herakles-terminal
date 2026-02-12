@@ -60,16 +60,6 @@ export interface AutomationLog {
   success: boolean;
 }
 
-interface ExecutionMetrics {
-  traceId: string;
-  startTime: number;
-  endTime?: number;
-  durationMs?: number;
-  success: boolean;
-  errorType?: string;
-  errorMessage?: string;
-}
-
 type AutomationCallback = (automation: Automation, result: { success: boolean; output?: string }) => void;
 
 type WindowCreatedCallback = (sessionId: string, windowId: string, userEmail: string) => void;
@@ -100,12 +90,10 @@ export class AutomationEngine {
   private runningAutomations: Set<string> = new Set();
   private executionTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private userConcurrencyCount: Map<string, number> = new Map();
-  private executionMetrics: Map<string, ExecutionMetrics> = new Map();
 
   // Safety limits
   private readonly MAX_EXECUTION_TIME_MS = 30 * 1000;  // 30 seconds
   private readonly MAX_CONCURRENT_PER_USER = 10;
-  private readonly STEP_TIMEOUT_MULTIPLIER = 1.5;  // Add 50% to step delays for timeout
 
   constructor(store: SessionStore, windowManager: WindowManager) {
     this.store = store;

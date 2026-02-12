@@ -57,10 +57,10 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('window:layout'),
     windowId: uuidSchema,
-    x: z.number().int().min(0).max(10000),
-    y: z.number().int().min(0).max(10000),
-    width: z.number().int().min(50).max(10000),
-    height: z.number().int().min(50).max(10000),
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+    width: z.number().min(0.01).max(1),
+    height: z.number().min(0.01).max(1),
   }),
   z.object({
     type: z.literal('window:subscribe'),
@@ -72,6 +72,11 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('window:rename'),
     windowId: uuidSchema,
     name: z.string().min(1).max(100),
+  }),
+  z.object({
+    type: z.literal('window:replay'),
+    windowId: uuidSchema,
+    afterSeq: z.number().int().min(0),
   }),
   z.object({
     type: z.literal('todo:subscribe'),

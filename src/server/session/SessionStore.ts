@@ -404,6 +404,17 @@ export class SessionStore {
           CREATE INDEX IF NOT EXISTS idx_user_layouts_window_count ON user_layouts(window_count);
         `,
       },
+      {
+        version: '005_add_hidden_templates',
+        sql: `
+          CREATE TABLE IF NOT EXISTS hidden_templates (
+            user_email TEXT NOT NULL,
+            template_id TEXT NOT NULL,
+            hidden_at INTEGER NOT NULL,
+            PRIMARY KEY (user_email, template_id)
+          );
+        `,
+      },
     ];
 
     for (const migration of migrations) {
@@ -846,6 +857,67 @@ export class SessionStore {
   deleteTemplate(id: string, userEmail: string): void {
     const stmt = this.db.prepare('DELETE FROM templates WHERE id = ? AND user_email = ?');
     stmt.run(id, userEmail);
+  }
+
+  renameTemplateCategory(userEmail: string, oldCategory: string, newCategory: string): number {
+    const stmt = this.db.prepare('UPDATE templates SET category = ? WHERE user_email = ? AND category = ?');
+    const result = stmt.run(newCategory, userEmail, oldCategory);
+    return result.changes;
+  }
+
+  deleteTemplatesByCategory(userEmail: string, category: string): number {
+    const stmt = this.db.prepare('DELETE FROM templates WHERE user_email = ? AND category = ?');
+    const result = stmt.run(userEmail, category);
+    return result.changes;
+  }
+
+  moveTemplatesToCategory(userEmail: string, templateIds: string[], newCategory: string): number {
+    const placeholders = templateIds.map(() => '?').join(',');
+    const stmt = this.db.prepare(
+      `UPDATE templates SET category = ? WHERE user_email = ? AND id IN (${placeholders})`
+    );
+    const result = stmt.run(newCategory, userEmail, ...templateIds);
+    return result.changes;
+  }
+
+  deleteTemplates(userEmail: string, templateIds: string[]): number {
+    const placeholders = templateIds.map(() => '?').join(',');
+    const stmt = this.db.prepare(
+      `DELETE FROM templates WHERE user_email = ? AND id IN (${placeholders})`
+    );
+    const result = stmt.run(userEmail, ...templateIds);
+    return result.changes;
+  }
+
+  getTemplateCategories(userEmail: string): { category: string; count: number }[] {
+    const stmt = this.db.prepare(
+      'SELECT category, COUNT(*) as count FROM templates WHERE user_email = ? GROUP BY category ORDER BY category'
+    );
+    return stmt.all(userEmail) as { category: string; count: number }[];
+  }
+
+  hideTemplate(userEmail: string, templateId: string): void {
+    const stmt = this.db.prepare(
+      'INSERT OR IGNORE INTO hidden_templates (user_email, template_id, hidden_at) VALUES (?, ?, ?)'
+    );
+    stmt.run(userEmail, templateId, Date.now());
+  }
+
+  unhideTemplate(userEmail: string, templateId: string): void {
+    const stmt = this.db.prepare('DELETE FROM hidden_templates WHERE user_email = ? AND template_id = ?');
+    stmt.run(userEmail, templateId);
+  }
+
+  getHiddenTemplateIds(userEmail: string): string[] {
+    const stmt = this.db.prepare('SELECT template_id FROM hidden_templates WHERE user_email = ?');
+    const rows = stmt.all(userEmail) as { template_id: string }[];
+    return rows.map(r => r.template_id);
+  }
+
+  unhideAllTemplates(userEmail: string): number {
+    const stmt = this.db.prepare('DELETE FROM hidden_templates WHERE user_email = ?');
+    const result = stmt.run(userEmail);
+    return result.changes;
   }
 
   getCommandHistory(userEmail: string, sessionId?: string, limit = 100): CommandHistoryRecord[] {

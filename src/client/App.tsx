@@ -3,8 +3,8 @@ import { enableConsoleLoopback } from './utils/consoleLoopback';
 
 // Enable console loopback for server-side debugging
 enableConsoleLoopback();
-import { Terminal as XTerm } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
+import type { Terminal as XTerm } from '@xterm/xterm';
+import type { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
 import QuickKeyBar from './components/QuickKeyBar/QuickKeyBar';
@@ -339,7 +339,6 @@ export default function App() {
   }, []);
 
   const terminalRefs = useRef<Map<string, TerminalCoreHandle>>(new Map());
-  const terminalsRef = useRef<Map<string, { term: XTerm; fitAddon: FitAddon }>>(new Map());
   const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
   const sendMessageRef = useRef<((msg: object) => void) | null>(null);
   const addArtifactRef = useRef(addArtifact);
@@ -357,20 +356,17 @@ export default function App() {
   const getActiveTerminal = useCallback(() => {
     if (!activeWindowId) return null;
     const handle = terminalRefs.current.get(activeWindowId);
-    if (handle?.terminal) return handle.terminal;
-    const entry = terminalsRef.current.get(activeWindowId);
-    return entry?.term || null;
+    return handle?.terminal || null;
   }, [activeWindowId]);
 
 
   const doDestroyTerminal = (windowId: string) => {
+    const handle = terminalRefs.current.get(windowId);
+    if (handle?.terminal) {
+      handle.terminal.dispose();
+    }
     terminalRefs.current.delete(windowId);
     outputPipelineRef.current?.clear(windowId);
-    const terminal = terminalsRef.current.get(windowId);
-    if (terminal) {
-      terminal.term.dispose();
-      terminalsRef.current.delete(windowId);
-    }
     const observer = resizeObserversRef.current.get(windowId);
     if (observer) {
       observer.disconnect();
@@ -490,9 +486,6 @@ export default function App() {
         const handle = terminalRefs.current.get(msg.windowId);
         if (handle?.terminal) {
           handle.terminal.reset();
-        } else {
-          const terminal = terminalsRef.current.get(msg.windowId);
-          if (terminal) terminal.term.reset();
         }
         break;
       }
@@ -505,7 +498,7 @@ export default function App() {
         restoreNeededAfterRecoveryRef.current.add(msg.windowId);
 
         const handle = terminalRefs.current.get(msg.windowId);
-        const terminal = handle?.terminal || terminalsRef.current.get(msg.windowId)?.term;
+        const terminal = handle?.terminal;
 
         if (terminal && msg.data) {
           // Step 2: Single RAF (reduced from 3 nested RAFs)
@@ -566,12 +559,21 @@ export default function App() {
         if (resizeCoordinatorRef.current.isResizePending(windowId)) {
           outputPipelineRef.current?.setResizePending(windowId, true);
         }
-        outputPipelineRef.current?.enqueue(windowId, msg.data);
+        outputPipelineRef.current?.enqueue(windowId, msg.data, msg.seq);
+        break;
+      }
+
+      case 'window:replay-response': {
+        // Write replayed data directly to terminal (bypasses pipeline discard logic)
+        if (msg.data) {
+          const handle = terminalRefs.current.get(msg.windowId);
+          handle?.terminal?.write(msg.data);
+        }
         break;
       }
 
       case 'window:renamed':
-        setWindows(prev => prev.map(w => 
+        setWindows(prev => prev.map(w =>
           w.id === msg.windowId ? { ...w, name: msg.name || msg.autoName || w.name } : w
         ));
         break;
@@ -640,9 +642,14 @@ export default function App() {
   const wasConnectedRef = useRef(false);
   const handleStateChange = useCallback((newState: ConnectionState) => {
     if (newState === 'reconnecting' || newState === 'disconnected') {
-      // Clear pipeline and pending restores on disconnect/reconnect
-      // This prevents stale data from corrupting the terminal after reconnection
-      outputPipelineRef.current?.clearAll();
+      // Reset pipeline state per window on disconnect/reconnect
+      // Uses resetState to preserve lastProcessedSeq for replay on reconnect
+      const pipeline = outputPipelineRef.current;
+      if (pipeline) {
+        for (const w of windows) {
+          pipeline.resetState(w.id);
+        }
+      }
       pendingRestoreRef.current.clear();
 
       // Reset loading state to prevent stuck loading screen
@@ -735,9 +742,6 @@ export default function App() {
       const handle = terminalRefs.current.get(windowId);
       if (handle) {
         handle.write(data);
-      } else {
-        const terminal = terminalsRef.current.get(windowId);
-        if (terminal) terminal.term.write(data);
       }
     };
 
@@ -762,6 +766,11 @@ export default function App() {
     // Create output pipeline with health monitor
     outputPipelineRef.current = new OutputPipelineManager(writeToTerminal, {
       healthMonitor,
+    });
+
+    // Wire up replay request callback - sends window:replay to server
+    outputPipelineRef.current.setReplayRequestCallback((windowId, afterSeq) => {
+      sendMessageRef.current?.({ type: 'window:replay', windowId, afterSeq });
     });
 
     return () => {
@@ -794,26 +803,34 @@ export default function App() {
     setActiveWindowId(id);
   }, []);
 
+  // Trigger resize for all terminals when panel layout changes (after 220ms CSS transition)
+  const panelResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current);
+    panelResizeTimerRef.current = setTimeout(() => {
+      resizeCoordinatorRef.current.triggerResize();
+    }, 220);
+    return () => { if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current); };
+  }, [sidePanelOpen, sidePanelExpanded, todoPanelExpanded, minimapVisible]);
+
   const fitTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   const handleLayoutChange = useCallback((id: string, layout: { x: number; y: number; width: number; height: number }, isDragging = false) => {
     setWindows(prev => prev.map(w => w.id === id ? { ...w, ...layout } : w));
     sendMessage({ type: 'window:layout', windowId: id, ...layout });
-    
+
     if (isDragging) {
       return;
     }
-    
+
+    // Use resize coordinator for proper fit + server notification
     const existingTimeout = fitTimeoutRef.current.get(id);
     if (existingTimeout) clearTimeout(existingTimeout);
-    
+
     const timeout = setTimeout(() => {
-      const terminal = terminalsRef.current.get(id);
-      if (terminal) {
-        try { terminal.fitAddon.fit(); } catch {}
-      }
+      resizeCoordinatorRef.current.resizeTarget(id);
       fitTimeoutRef.current.delete(id);
-    }, 350);  // FIX WG-4: 200ms CSS transition + 150ms buffer for slower devices (was 250ms)
+    }, 250);  // 200ms CSS transition + 50ms buffer
     fitTimeoutRef.current.set(id, timeout);
   }, [sendMessage]);
 
@@ -1067,10 +1084,8 @@ export default function App() {
 
   const handleRefocusTerminal = useCallback(() => {
     if (activeWindowId) {
-      const terminal = terminalsRef.current.get(activeWindowId);
-      if (terminal) {
-        terminal.term.focus();
-      }
+      const handle = terminalRefs.current.get(activeWindowId);
+      handle?.focus();
     }
   }, [activeWindowId]);
 
@@ -1088,8 +1103,8 @@ export default function App() {
   const handleSwitchSession = useCallback((newSessionId: string) => {
     if (newSessionId === sessionId) return;
     setIsLoading(true);
-    terminalsRef.current.forEach(t => t.term.dispose());
-    terminalsRef.current.clear();
+    terminalRefs.current.forEach(handle => handle.terminal?.dispose());
+    terminalRefs.current.clear();
     setWindows([]);
     setActiveWindowId(null);
     localStorage.setItem('herakles-session-id', newSessionId);
@@ -1097,13 +1112,8 @@ export default function App() {
   }, [sessionId, sendMessage]);
 
   const handlePreferencesChange = useCallback((prefs: { fontSize: number }) => {
+    // Font size change is handled by TerminalCore's useEffect on fontSize prop
     setFontSize(prefs.fontSize);
-    terminalsRef.current.forEach(({ term }) => {
-      term.options.fontSize = prefs.fontSize;
-    });
-    terminalsRef.current.forEach(({ fitAddon }) => {
-      try { fitAddon.fit(); } catch {}
-    });
   }, []);
 
   const handleApplyLayout = useCallback((layouts: { x: number; y: number; width: number; height: number }[]) => {

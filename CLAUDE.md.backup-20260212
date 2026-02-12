@@ -1,0 +1,519 @@
+# Herakles Terminal - Claude Development Context
+
+**Version:** 0.3.0 | **Last Updated:** February 2026
+
+## Quick Context
+- **What:** Mobile-first web terminal (xterm.js + WebSocket + tmux persistence)
+- **Port:** 8096 | **Subdomain:** terminal.herakles.dev
+- **Stack:** React 18 + TypeScript + Vite (client) | Node.js + Express + ws + node-pty (server)
+- **Status:** Production-ready, terminal stability overhaul complete (Feb 2026)
+
+## Recent Changes
+
+### Terminal Stability Overhaul (February 2026) — Latest
+17 fixes across 13 files. 183/183 tests pass. Net -155 lines.
+
+**Core Fixes:**
+- ✅ **useImperativeHandle getter pattern** - TerminalCore handle uses ES5 getters so `handle.terminal` always returns current ref (was returning stale `null`)
+- ✅ **Removed dead `terminalsRef`** - 8 dead code paths eliminated from App.tsx; all terminal access now through `terminalRefs` handles
+- ✅ **Layout schema fix** - Zod `window:layout` schema used `.int()` rejecting fractional 0-1 values, breaking all layout persistence
+- ✅ **Orphaned CSS deleted** - Removed `terminal-base.css` and `terminal-xterm.css` (never imported, contained conflicting rules)
+
+**Resize Pipeline:**
+- ✅ **Atomic tmux resize** - Single tmux command with `\;` chain instead of two child processes
+- ✅ **Server-side resize dedup** - 50ms coalescing timer in ConnectionManager prevents process flooding
+- ✅ **Resize lock microtask release** - `Promise.resolve().then()` instead of nested RAF for same-frame unlock
+- ✅ **Panel resize trigger** - useEffect fires global resize 220ms after panel state changes (matches CSS transition)
+- ✅ **Pre-capture settle time** - Increased 50ms → 100ms in WindowManager
+
+**Display & Layout:**
+- ✅ **Overflow-y hidden** - WebGL handles scrolling; forced scrollbar was stealing column space
+- ✅ **SplitView container transition** - `transition-[left,right] duration-200 ease-out` for smooth panel open/close
+- ✅ **Backpressure fix** - OutputPipelineManager was checking buffer size after clear (always 0)
+- ✅ **Canvas verification awaited** - useResizeCoordinator `executeResize` is now async
+
+**Mobile:**
+- ✅ **Containment softened** - `contain: strict` → `contain: layout style` on mobile (strict broke scrolling)
+- ✅ **Keyboard transition suppression** - Prevents layout shift during keyboard open/close
+- ✅ **Dead code cleanup** - Removed unused `animating` state, `waitForTransitions` function
+
+### Previous Changes (January 2026)
+
+**Scrollback & WebGL:**
+- ✅ Scrollback 20K → 5K, tmux capture 50K → 5K
+- ✅ WebGL context menu fix, selection tracking, OOM recovery
+- ✅ WebGL-only rendering (no Canvas fallback), clean refresh
+
+### TodoPanel - Claude Code Integration
+- ✅ **Live Task Display** - Shows Claude Code's TodoWrite tasks in real-time
+- ✅ **Global Watcher** - Monitors `~/.claude/todos/` for all sessions
+- ✅ **Collapsible Panel** - Left sidebar (48px collapsed, 280px expanded)
+- ✅ **Status Indicators** - Pending, in-progress (animated), completed states
+- ✅ **WebSocket Sync** - `todo:subscribe`, `todo:sync`, `todo:update` messages
+
+### Token Counter - Claude Code Context Usage (February 2026)
+- ✅ **Real-Time Context Tracking** - Circular indicator shows Claude Code context window usage
+- ✅ **Project Auto-Detection** - Automatically matches windows to Claude Code projects via cwd
+- ✅ **Color-Coded Alerts** - Green (<50%), yellow (50-75%), orange (75-90%), red (90%+)
+- ✅ **Live Updates** - Watches `~/.claude/projects/*.jsonl` for token usage changes
+- ✅ **Database Migration** - Backfills `auto_name` for existing windows on server startup
+- ✅ **Hover Tooltip** - Shows detailed token counts (e.g., "Context: 78,931 / 200,000 tokens (39%)")
+
+### Project Navigator Enhancement
+- ✅ **Smart Merge Logic** - Matches projects by path AND directory-name-to-id fallback
+- ✅ **Auto-Add API** - `GET /api/projects/unregistered` and `POST /api/projects/register`
+- ✅ **AI Thumbnails** - 114 gradient icons in `public/thumbnails/`, auto-detected per project
+- ✅ **Registry-Only Discovery** - Nested paths like `projects/math-visualization` now discovered
+- ✅ **Fallback System** - Thumbnails with graceful fallback to tech-stack SVG icons
+
+### Display Quality Refactor (Complete)
+- ✅ OutputPipelineManager consolidates buffer handling
+- ✅ Resize coordination simplified (8 refs → 4 refs)
+- ✅ Renderer lifecycle uses MutationObserver + state machine
+- ✅ 6 themes available with runtime switching
+
+See `docs/archive/2026-01-refactor/` for historical implementation details.
+
+## Project Discovery
+```bash
+# Structure
+ls src/client/components/    # React components (17 dirs, incl. TodoPanel/)
+ls src/server/               # Backend modules (16 dirs, incl. todo/)
+ls docs/                     # Documentation
+
+# Current state
+curl -s http://localhost:8096/api/health | jq
+lsof -i :8096                # Check port
+sqlite3 data/zeus.db "SELECT COUNT(*) FROM sessions"  # DB state
+```
+
+## Development Commands
+```bash
+npm run dev          # Start dev (Vite + nodemon)
+npm run build        # Production build
+npm run typecheck    # Type check
+npm run lint         # Lint
+npm test             # Vitest
+```
+
+## Verification (Run After Changes)
+```bash
+# After ANY code change - quick validation
+npm run typecheck && npm run lint
+
+# After client changes
+npm run build && curl -s http://localhost:8096/api/health | jq
+
+# After server changes (systemd service)
+npm run build && systemctl --user restart zeus-terminal && sleep 3 && curl -s http://localhost:8096/api/health
+
+# After WebSocket changes
+npm test -- --grep "websocket" && npm run dev  # Manual test in browser
+
+# Full validation before commit
+npm run typecheck && npm run lint && npm test && npm run build
+```
+
+## Testing Patterns
+```bash
+# Run all tests
+npm test
+
+# Run specific test file
+npm test -- src/client/services/__tests__/OutputPipelineManager.test.ts
+
+# Run tests matching pattern
+npm test -- --grep "resize"
+
+# Watch mode during development
+npm test -- --watch
+```
+**Test location:** Tests live next to source in `__tests__/` directories.
+**Naming:** `ComponentName.test.ts` or `hookName.test.ts`
+
+## Service Commands
+```bash
+# Production (systemd)
+systemctl --user status zeus-terminal      # Check status
+systemctl --user restart zeus-terminal     # Restart service
+journalctl --user -u zeus-terminal -f      # View logs
+
+# Development (docker-compose)
+docker-compose up -d                       # Start containers
+docker-compose logs -f zeus-terminal       # View logs
+docker-compose restart zeus-terminal       # Restart
+
+# Check what's running
+lsof -i :8096                              # Find process on port
+curl -s http://localhost:8096/api/health   # Health check
+```
+
+## DO NOT
+- **Don't edit `dist/`** - Generated files, will be overwritten
+- **Don't hardcode secrets** - Use `process.env.VAR` and load from hercules.env
+- **Don't skip typecheck** - TypeScript errors break production builds
+- **Don't modify `node_modules/`** - Use patches or forks if needed
+- **Don't add `console.log` in production** - Use the Logger utility instead
+- **Don't bypass CSRF** - All POST endpoints require CSRF token
+
+## Git Conventions
+```bash
+# Branch naming
+feature/description    # New features
+fix/description        # Bug fixes
+refactor/description   # Code improvements
+
+# Commit message format
+type: short description
+
+Types: feat, fix, refactor, docs, test, chore
+
+# Examples
+feat: add theme switching API
+fix: resolve resize race condition
+refactor: consolidate output buffers
+```
+
+**Before committing:**
+```bash
+npm run typecheck && npm run lint && npm test
+git add -A && git status  # Review changes
+git commit -m "type: description"
+```
+
+**Author:** Hercules <noreply@herakles.dev>
+
+## Architecture
+```
+Client (src/client/)                Server (src/server/)
+├── App.tsx                         ├── index.ts (Express + WebSocket)
+├── components/                     ├── api/routes.ts
+│   ├── TerminalCore/               ├── api/commands.ts (search integration)
+│   ├── SplitView/                  ├── api/templates.ts (88 built-in templates)
+│   ├── SidePanel/                  ├── websocket/ConnectionManager.ts
+│   │   └── CommandBuilder.tsx      ├── session/SessionManager.ts
+│   ├── TodoPanel/                  ├── session/SessionStore.ts (SQLite)
+│   ├── Canvas/                     ├── tmux/TmuxManager.ts
+│   ├── MusicPlayer/                ├── canvas/ArtifactWatcher.ts
+│   ├── MobileInputHandler/         ├── music/ (audio playback)
+│   ├── QuickKeyBar/                ├── todo/ (Claude Code sync)
+│   └── Toast/                      │   ├── TodoManager.ts
+├── hooks/                          │   └── TodoFileWatcher.ts
+│   ├── useWebSocket.ts             ├── search/ (command discovery)
+│   ├── useXTermSetup.ts            │   ├── SearchEngine.ts (fuzzy search)
+│   ├── useRendererSetup.ts         │   └── ContextDetector.ts
+│   └── useResizeCoordinator.ts     ├── middleware/ (auth, csrf, rate-limit)
+├── services/                       └── audit/AuditLogger.ts
+│   └── OutputPipelineManager.ts
+└── styles/
+    ├── terminal.css          # Core terminal styles
+    └── terminal-mobile.css   # Mobile overrides
+
+Shared (src/shared/)
+├── types.ts          # TypeScript interfaces
+├── protocol.ts       # WebSocket message types
+├── todoProtocol.ts   # Todo sync protocol
+├── musicProtocol.ts  # Music player protocol
+├── constants.ts      # Config defaults
+├── themes.ts         # Terminal themes (6 built-in)
+└── errors.ts         # Error types
+```
+
+## Key Files
+| Purpose | Path |
+|---------|------|
+| Main app | `src/client/App.tsx` |
+| Terminal wrapper | `src/client/components/TerminalCore/TerminalCore.tsx` |
+| Split view layout | `src/client/components/SplitView/SplitView.tsx` |
+| Side panel | `src/client/components/SidePanel/SidePanel.tsx` |
+| Command builder | `src/client/components/SidePanel/CommandBuilder.tsx` |
+| **Output pipeline** | `src/client/services/OutputPipelineManager.ts` |
+| WebSocket client | `src/client/hooks/useWebSocket.ts` |
+| XTerm setup | `src/client/hooks/useXTermSetup.ts` |
+| Resize coordinator | `src/client/hooks/useResizeCoordinator.ts` |
+| **Renderer setup (WebGL + OOM recovery)** | `src/client/hooks/useRendererSetup.ts` |
+| Terminal CSS | `src/client/styles/terminal.css` + `terminal-mobile.css` |
+| Server entry | `src/server/index.ts` |
+| WebSocket server | `src/server/websocket/ConnectionManager.ts` |
+| Session store | `src/server/session/SessionStore.ts` |
+| Command routes | `src/server/api/commands.ts` |
+| Search engine | `src/server/search/SearchEngine.ts` |
+| Built-in templates | `src/server/api/templates.ts` |
+| Config | `src/server/config.ts` |
+| Shared types | `src/shared/types.ts` |
+| **Theme definitions** | `src/shared/themes.ts` |
+| WebSocket protocol | `src/shared/protocol.ts` |
+| **Project Navigator** | `src/client/components/ProjectNavigator/` |
+| Project API | `src/server/api/projects.ts` |
+| **Project thumbnails** | `public/thumbnails/*.png` |
+| **TodoPanel** | `src/client/components/TodoPanel/` |
+| TodoManager | `src/server/todo/TodoManager.ts` |
+| TodoFileWatcher | `src/server/todo/TodoFileWatcher.ts` |
+| Todo protocol | `src/shared/todoProtocol.ts` |
+
+## Project Navigator System
+
+The ProjectNavigator provides quick access to all Hercules platform projects:
+
+**Features:**
+- **Dynamic project discovery** from filesystem + APPS_REGISTRY.json merge
+- **AI-generated thumbnails** (114 gradient icons, auto-detected)
+- **Smart matching** - matches by path OR directory-name-to-id fallback
+- **Category filtering** - 15 categories from registry
+- **Favorites** - stored in localStorage
+- **Search** - fuzzy search across name, path, description, category
+
+**API Endpoints:**
+```
+GET  /api/projects              - List all projects (60s cache)
+GET  /api/projects/categories   - Get category definitions
+GET  /api/projects/unregistered - Find unregistered root folders
+POST /api/projects/register     - Add new project to registry
+POST /api/projects/refresh      - Clear cache
+```
+
+**Thumbnail System:**
+```bash
+# Thumbnails stored in public/thumbnails/{project-id}.png
+# Auto-detected by projects.ts addThumbnails() function
+# Fallback to tech-stack SVG icons (Docker, Node, Python, Rust, Go)
+
+# Generate new thumbnails with image-gen-suite:
+cd /home/hercules/image-gen-suite
+python3 -c "
+from generators.icon import generate_icon
+icon = generate_icon('XX', size=256, style='gradient',
+                    primary_color='#00d4ff', secondary_color='#0891b2', rounded=True)
+icon.save('/home/hercules/herakles-terminal/public/thumbnails/my-project.png')
+"
+```
+
+## Token Counter System (Claude Code Context Tracking)
+
+The ContextIndicator displays real-time Claude Code context window usage on window titles:
+
+**Features:**
+- **Auto-detection** - Matches windows to projects via `auto_name` field (extracted from cwd)
+- **Live monitoring** - `ContextFileWatcher` watches `~/.claude/projects/{project}/*.jsonl`
+- **Color coding** - Visual feedback: green → yellow → orange → red as context fills
+- **Tooltip details** - Hover shows "Context: X / 200,000 tokens (Y%)"
+- **Migration** - Backfills existing windows on server startup
+
+**How it works:**
+1. Window created → `TmuxManager.getCurrentWorkingDirectory()` gets cwd
+2. `WindowManager.extractProjectName()` extracts project (e.g., "herakles-terminal")
+3. Stored in `windows.auto_name` field in database
+4. Client sends `context:subscribe` with windowId on terminal ready
+5. `ContextManager` looks up `auto_name`, encodes to `-home-hercules-{project}`
+6. Matches to `~/.claude/projects/-home-hercules-{project}/` directory
+7. `ContextFileWatcher` reads latest `.jsonl` file, extracts `usage` data
+8. Broadcasts `context:sync` → client renders `ContextIndicator`
+
+**WebSocket Messages:**
+```typescript
+// Client → Server
+{ type: 'context:subscribe', windowId }
+{ type: 'context:unsubscribe', windowId }
+
+// Server → Client
+{ type: 'context:sync', windowId, usage }    // Initial state
+{ type: 'context:update', windowId, usage }  // Live updates
+```
+
+**Troubleshooting:**
+- **No indicator shows:** Check if window has `auto_name` populated (must be in `/home/hercules/{project}`)
+- **Always shows null:** Verify `~/.claude/projects/-home-hercules-{project}/` exists
+- **Not updating:** Check `ContextFileWatcher` logs for file processing errors
+
+## TodoPanel System (Claude Code Integration)
+
+The TodoPanel displays live task updates from Claude Code's TodoWrite tool:
+
+**Features:**
+- **Live sync** - Watches `~/.claude/todos/` for real-time updates
+- **Per-window** - Each terminal window shows its own todo list
+- **Collapsible** - 48px collapsed, 280px expanded
+- **Status indicators** - Pending (gray), in-progress (cyan glow), completed (green check)
+- **Glass morphism UI** - Matches terminal aesthetic
+
+**How it works:**
+1. Claude Code writes todos to `~/.claude/todos/{session-id}.json`
+2. `TodoFileWatcher` detects changes via `fs.watch()`
+3. `TodoManager` broadcasts updates via WebSocket
+4. `TodoPanel` renders with status-sorted list
+
+**WebSocket Messages:**
+```typescript
+// Client → Server
+{ type: 'todo:subscribe', windowId }
+{ type: 'todo:unsubscribe', windowId }
+
+// Server → Client
+{ type: 'todo:sync', windowId, todos }
+{ type: 'todo:update', windowId, todos, source }
+{ type: 'todo:clear', windowId }
+```
+
+**File format** (Claude Code native):
+```json
+[
+  { "content": "Task description", "status": "in_progress", "activeForm": "Working on task" }
+]
+```
+
+## WebSocket Protocol
+```typescript
+// Client → Server
+{ type: 'input', windowId, data }
+{ type: 'window:resize', windowId, cols, rows }
+{ type: 'window:subscribe', windowId }
+{ type: 'session:create', name? }
+{ type: 'session:resume', sessionId }
+{ type: 'todo:subscribe', windowId }
+{ type: 'todo:unsubscribe', windowId }
+
+// Server → Client
+{ type: 'auth-success', token, sessions }
+{ type: 'session:created', session }
+{ type: 'window:created', window }
+{ type: 'window:output', windowId, data }
+{ type: 'window:restore', windowId, content }
+{ type: 'canvas:artifact', artifact }
+{ type: 'todo:sync', windowId, todos }
+{ type: 'todo:update', windowId, todos, source }
+{ type: 'todo:clear', windowId }
+{ type: 'error', code, message }
+```
+See `src/shared/protocol.ts` and `src/shared/todoProtocol.ts` for complete list.
+
+**Note:** `window:resize` messages are server-side deduplicated with 50ms coalescing in ConnectionManager to prevent tmux process flooding.
+
+## Canvas Artifact System
+```bash
+send-artifact markdown '# Title'
+send-artifact mermaid 'graph TD; A-->B'
+send-artifact code 'console.log("hi")' javascript
+send-artifact json '{"key": "value"}'
+```
+See `docs/CANVAS.md` for full documentation.
+
+## Command Search & Discovery System
+The CommandBuilder in SidePanel provides intelligent command suggestions:
+
+**Features:**
+- **88 built-in templates** across categories: git, docker, npm, system, ssh, claude
+- **Fuzzy search** with Jaro-Winkler similarity (finds "gti status" → "git status")
+- **Context-aware boosting** - git commands boosted in git repos, docker commands near compose files
+- **User history integration** - recent commands ranked by frequency and recency
+
+**API Endpoints:**
+```
+GET /api/commands/suggestions?prefix=git&limit=15
+GET /api/commands/history?limit=20
+POST /api/commands/validate  { command: "rm -rf /" }
+```
+
+**Response format:**
+```json
+{
+  "data": [{
+    "command": "git status",
+    "description": "Show working tree status",
+    "category": "git",
+    "score": 0.95,
+    "source": "template",
+    "contextBoosts": ["git-repo-detected"]
+  }]
+}
+```
+
+**Adding new templates:** Edit `src/server/api/templates.ts` BUILT_IN_TEMPLATES array.
+
+## Component Patterns
+```tsx
+// Styling: Tailwind + CSS variables (terminal.css)
+// Colors: --accent-cyan (#00d4ff), --bg-primary (#000)
+// Sizing: text-[10px], text-[11px] for compact UI
+// Borders: border-[#1a1a1e], rounded (not rounded-lg)
+
+// Imports: use index.ts barrels
+import { SplitView } from './components/SplitView';
+
+// Handlers: useCallback for props
+const handleClick = useCallback(() => { ... }, [deps]);
+```
+
+## Common Tasks
+
+### Add WebSocket message type
+1. Define type in `src/shared/protocol.ts`
+2. Add validation in `src/server/websocket/messageSchema.ts`
+3. Add handler in `src/server/websocket/ConnectionManager.ts`
+4. Add client handler in `src/client/App.tsx` → `handleMessage`
+
+### Add SidePanel tab
+1. Create component in `src/client/components/SidePanel/`
+2. Add to `TABS` array in `SidePanel.tsx`
+
+### Add API endpoint
+1. Add route in `src/server/api/routes.ts`
+2. Add types if needed in `src/shared/types.ts`
+
+### Send artifact from backend
+```typescript
+connectionManager.broadcastToAll({
+  type: 'canvas:artifact',
+  artifact: { type: 'markdown', content: '# Hello', title: 'Test' }
+});
+```
+
+## Debugging
+```bash
+# Server logs
+tail -f server.log
+
+# tmux sessions
+tmux -S /tmp/zeus-tmux list-sessions
+
+# Database
+sqlite3 data/zeus.db "SELECT id, name, state FROM sessions ORDER BY last_active_at DESC LIMIT 5"
+sqlite3 data/zeus.db "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 10"
+
+# Port check
+lsof -i :8096
+
+# WebSocket: Browser DevTools → Network → WS tab
+```
+See `docs/guides/DEBUGGING_GUIDE.md` for detailed log correlation.
+
+## Error Recovery
+| Problem | Solution |
+|---------|----------|
+| Build fails | `rm -rf node_modules && npm install && npm run build` |
+| TypeScript errors | `npm run typecheck` to see all errors, fix in order |
+| Port 8096 in use | `lsof -i :8096` then `kill -9 <PID>` |
+| Container won't start | `docker logs zeus-terminal` to see error |
+| Database locked | `sqlite3 data/zeus.db ".tables"` to test, restart if locked |
+| tmux session stuck | `tmux -S /tmp/zeus-tmux kill-server` and restart |
+| WebSocket disconnects | Check `server.log` for connection errors |
+| WebGL context lost | Auto-recovers: clears buffer, reduces scrollback to 5K lines |
+| Resize glitches | Server dedup (50ms) + atomic tmux resize handles this; check `useResizeCoordinator` lock |
+| Panel open misalignment | Panel resize trigger fires 220ms after state change; verify CSS `duration-200` matches |
+
+## Security
+- **Auth:** Cloudflare Access (Authelia middleware)
+- **Secrets:** `source /home/hercules/.secrets/hercules.env`
+- **CSRF:** Protection on POST endpoints
+- **Rate limiting:** Configurable per endpoint
+- **Audit logging:** All auth/session events → SQLite
+
+See `SECURITY.md` for full details.
+
+## Documentation
+| Doc | Purpose |
+|-----|---------|
+| `docs/ARCHITECTURE.md` | System diagram, component overview |
+| `docs/CANVAS.md` | Artifact system (send-artifact, renderers) |
+| `docs/guides/DEVELOPMENT_GUIDE.md` | Workflows, logging, testing |
+| `docs/guides/DEBUGGING_GUIDE.md` | Log correlation, troubleshooting |
+| `docs/archive/` | Historical: completed refactor plans and fix guides |

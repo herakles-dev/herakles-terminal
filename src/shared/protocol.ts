@@ -24,6 +24,7 @@ export type ClientMessageType =
   | 'window:send'
   | 'window:resize'
   | 'window:layout'
+  | 'window:replay'
   | 'input'
   | 'ping';
 
@@ -99,6 +100,7 @@ export type ClientMessage =
   | WindowSendMessage
   | WindowResizeMessage
   | WindowLayoutMessage
+  | WindowReplayMessage
   | InputMessage
   | PingMessage;
 
@@ -182,6 +184,21 @@ export interface WindowOutputMessage {
   type: 'window:output';
   windowId: string;
   data: string;
+  seq?: number;
+}
+
+export interface WindowReplayMessage {
+  type: 'window:replay';
+  windowId: string;
+  afterSeq: number;
+}
+
+export interface WindowReplayResponseMessage {
+  type: 'window:replay-response';
+  windowId: string;
+  data: string;
+  fromSeq: number;
+  toSeq: number;
 }
 
 export interface WindowListMessage {
@@ -320,6 +337,7 @@ export function isValidClientMessage(message: unknown): message is ClientMessage
     'window:send',
     'window:resize',
     'window:layout',
+    'window:replay',
     'input',
     'ping',
   ];

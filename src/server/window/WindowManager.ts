@@ -351,7 +351,7 @@ export class WindowManager {
     if (cols && rows && cols > 0 && rows > 0) {
       try {
         await this.tmux.resizeSession(windowId, cols, rows);
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
         console.warn(`[WindowManager] Pre-capture resize failed for ${windowId}:`, error);
       }

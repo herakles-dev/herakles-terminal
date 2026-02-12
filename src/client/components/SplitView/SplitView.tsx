@@ -105,7 +105,7 @@ export default function SplitView({
   const [activeDropZone, setActiveDropZone] = useState<DropZone | null>(null);
   const [selectedWindows, setSelectedWindows] = useState<Set<string>>(new Set());
   const [zoomedWindowId, setZoomedWindowId] = useState<string | null>(null);
-  const [animating] = useState(false);
+  // animating state managed by resize coordinator
   const animationFrameRef = useRef<number | null>(null);
   const [flushGroup, setFlushGroup] = useState<Set<string>>(new Set());
   const resizeCoordinator = useOptionalResizeCoordinator();
@@ -283,7 +283,7 @@ export default function SplitView({
     // Trigger resize after zoom animation completes
     setTimeout(() => {
       resizeCoordinator?.triggerResize();
-    }, 250);
+    }, 220);
   }, [resizeCoordinator]);
 
   const handleWindowClick = useCallback((e: React.MouseEvent, windowId: string) => {
@@ -651,11 +651,9 @@ export default function SplitView({
       setActiveDropZone(null);
       setFlushGroup(new Set());
       
-      if (!animating) {
-        requestAnimationFrame(() => {
-          resizeCoordinator?.triggerResize();
-        });
-      }
+      requestAnimationFrame(() => {
+        resizeCoordinator?.triggerResize();
+      });
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -764,7 +762,7 @@ export default function SplitView({
   const rightOffset = (minimapVisible ? minimapWidth : 0) + (sidePanelOpen ? sidePanelWidth : 0);
 
   return (
-    <div ref={containerRef} className="absolute bg-[#0a0a0f]" style={{ top: 0, left: leftOffset, bottom: 0, right: rightOffset }}>
+    <div ref={containerRef} className="absolute bg-[#0a0a0f] transition-[left,right] duration-200 ease-out" style={{ top: 0, left: leftOffset, bottom: 0, right: rightOffset }}>
       {snapGuides.x !== undefined && (
         <div 
           className="snap-guide snap-guide-v"

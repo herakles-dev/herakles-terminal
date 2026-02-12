@@ -160,19 +160,22 @@ export class TmuxManager {
       throw new TmuxError(`Session ${sessionId} not found`, 'SESSION_NOT_FOUND');
     }
 
+    // Atomic resize: resize both window and pane in a single tmux command sequence
     try {
-      await execAsync(`tmux -S ${socketPath} resize-window -t ${sessionName} -x ${cols} -y ${rows}`);
-    } catch (error) {
-      console.warn(`[TmuxManager] resize-window failed: ${(error as Error).message}`);
-    }
-    
-    try {
-      await execAsync(`tmux -S ${socketPath} resize-pane -t ${sessionName} -x ${cols} -y ${rows}`);
-    } catch (error) {
-      throw new TmuxError(
-        `Failed to resize pane: ${(error as Error).message}`,
-        'SOCKET_ERROR'
+      await execAsync(
+        `tmux -S ${socketPath} resize-window -t ${sessionName} -x ${cols} -y ${rows} \\; ` +
+        `resize-pane -t ${sessionName} -x ${cols} -y ${rows}`
       );
+    } catch (error) {
+      // Fallback: try pane resize alone (window resize fails on single-pane sessions)
+      try {
+        await execAsync(`tmux -S ${socketPath} resize-pane -t ${sessionName} -x ${cols} -y ${rows}`);
+      } catch (fallbackError) {
+        throw new TmuxError(
+          `Failed to resize: ${(fallbackError as Error).message}`,
+          'SOCKET_ERROR'
+        );
+      }
     }
   }
 
@@ -290,7 +293,7 @@ export class TmuxManager {
       const scrollbackFlag = visibleOnly ? '' : `-S -${scrollbackLines}`;
       const { stdout } = await execAsync(
         `tmux -S ${socketPath} capture-pane -t ${sessionName} -p -e -J ${scrollbackFlag} 2>/dev/null || true`,
-        { maxBuffer: 10 * 1024 * 1024 }
+        { maxBuffer: 10 * 1024 * 1024, timeout: 5000 }
       );
 
       // Strip Claude thinking dots/spinner lines from scrollback

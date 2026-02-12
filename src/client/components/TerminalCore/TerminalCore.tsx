@@ -287,22 +287,19 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
     useEffect(() => {
       if (terminalRef.current && fitAddonRef.current && fontSize !== undefined) {
         terminalRef.current.options.fontSize = fontSize;
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            fitAddonRef.current?.fit();
-            resizeCoordinator.triggerResize();
-          });
-        });
+        // Use unified resize path with immediate flag (skips debounce, still waits for transitions)
+        resizeCoordinator.resizeTarget(terminalId, true);
       }
-    }, [fontSize, resizeCoordinator]);
+    }, [fontSize, resizeCoordinator, terminalId]);
 
     // Expose imperative handle for parent components
+    // Uses getter pattern so handle.terminal always returns current ref value
     useImperativeHandle(
       ref,
       () => ({
-        terminal: terminalRef.current,
-        fitAddon: fitAddonRef.current,
-        renderError: renderErrorRef.current,
+        get terminal() { return terminalRef.current; },
+        get fitAddon() { return fitAddonRef.current; },
+        get renderError() { return renderErrorRef.current; },
         write: (data: string) => {
           terminalRef.current?.write(data);
         },
