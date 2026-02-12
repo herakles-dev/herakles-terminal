@@ -292,9 +292,27 @@ export class TmuxManager {
         `tmux -S ${socketPath} capture-pane -t ${sessionName} -p -e -J ${scrollbackFlag} 2>/dev/null || true`,
         { maxBuffer: 10 * 1024 * 1024 }
       );
+
+      // Strip Claude thinking dots/spinner lines from scrollback
+      // These accumulate in tmux buffer during long Claude Code sessions
+      // Pattern: lines of only dots, braille spinners, whitespace, or ANSI escapes
+      const cleaned = stdout
+        .split('\n')
+        .filter(line => {
+          // Strip ANSI escape sequences for analysis
+          const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
+          if (stripped.length === 0) return true; // Keep empty lines
+          // Filter lines that are ONLY dots (e.g. "....." or ". . . .")
+          if (/^[.\s]+$/.test(stripped)) return false;
+          // Filter braille spinner lines (U+2800-U+28FF)
+          if (/^[\u2800-\u28FF\s]+$/.test(stripped)) return false;
+          return true;
+        })
+        .join('\n');
+
       // Normalize line endings: convert bare LF to CRLF for xterm.js compatibility
       // Only convert LF not preceded by CR to avoid double-converting existing CRLF
-      return stdout.replace(/(?<!\r)\n/g, '\r\n');
+      return cleaned.replace(/(?<!\r)\n/g, '\r\n');
     } catch {
       return '';
     }
