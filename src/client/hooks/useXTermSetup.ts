@@ -7,6 +7,8 @@ import { THEMES, TERMINAL_DEFAULTS } from '@shared/constants';
 /**
  * Options for configuring XTerm terminal instance
  */
+const MOBILE_SCROLLBACK = 2000;
+
 interface UseXTermSetupOptions {
   /** Theme name from THEMES constant (default: 'dark') */
   theme?: keyof typeof THEMES;
@@ -14,8 +16,10 @@ interface UseXTermSetupOptions {
   fontSize?: number;
   /** Font family string (default: TERMINAL_DEFAULTS.fontFamily) */
   fontFamily?: string;
-  /** Scrollback buffer size (default: TERMINAL_DEFAULTS.scrollback) */
+  /** Scrollback buffer size (default: TERMINAL_DEFAULTS.scrollback, 2000 on mobile) */
   scrollback?: number;
+  /** Whether running on a mobile device */
+  isMobile?: boolean;
   /** Additional XTerm options to merge with defaults */
   additionalOptions?: Partial<ITerminalOptions>;
 }
@@ -64,9 +68,13 @@ export function useXTermSetup(options: UseXTermSetupOptions = {}): UseXTermSetup
     theme = 'dark',
     fontSize = TERMINAL_DEFAULTS.fontSize,
     fontFamily = TERMINAL_DEFAULTS.fontFamily,
-    scrollback = TERMINAL_DEFAULTS.scrollback,
+    scrollback: scrollbackOption,
+    isMobile = false,
     additionalOptions = {},
   } = options;
+
+  // Cap scrollback at 2000 on mobile to reduce memory usage
+  const scrollback = scrollbackOption ?? (isMobile ? MOBILE_SCROLLBACK : TERMINAL_DEFAULTS.scrollback);
 
   /**
    * Initialize XTerm instance with configuration and addons

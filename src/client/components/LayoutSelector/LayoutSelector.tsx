@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
 type WindowLayout = { x: number; y: number; width: number; height: number };
@@ -7,6 +7,15 @@ interface LayoutPreset {
   id: string;
   name: string;
   layouts: WindowLayout[];
+}
+
+interface SavedLayout {
+  id: string;
+  name: string;
+  windowCount: number;
+  layoutData: WindowLayout[];
+  isFavorite: boolean;
+  createdAt: number;
 }
 
 const LAYOUT_PRESETS: Record<number, LayoutPreset[]> = {
@@ -170,28 +179,52 @@ interface LayoutSelectorProps {
   windowCount: number;
   onSelectLayout: (layouts: WindowLayout[]) => void;
   currentLayoutId?: string;
+  currentLayouts?: WindowLayout[];
 }
 
-export default function LayoutSelector({ windowCount, onSelectLayout, currentLayoutId }: LayoutSelectorProps) {
+export default function LayoutSelector({ windowCount, onSelectLayout, currentLayoutId, currentLayouts }: LayoutSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>([]);
+  const [savingName, setSavingName] = useState('');
+  const [showSaveInput, setShowSaveInput] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const saveInputRef = useRef<HTMLInputElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, right: 0 });
-  
+
   const presets = LAYOUT_PRESETS[windowCount] || LAYOUT_PRESETS[1];
+
+  const fetchSavedLayouts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/layouts');
+      if (res.ok) {
+        const json = await res.json();
+        setSavedLayouts(json.data || []);
+      }
+    } catch {
+      // Silently fail - saved layouts are non-critical
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchSavedLayouts();
+    }
+  }, [isOpen, fetchSavedLayouts]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (
-        dropdownRef.current && 
+        dropdownRef.current &&
         !dropdownRef.current.contains(e.target as Node) &&
         buttonRef.current &&
         !buttonRef.current.contains(e.target as Node)
       ) {
         setIsOpen(false);
+        setShowSaveInput(false);
       }
     };
-    
+
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -208,10 +241,67 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (showSaveInput && saveInputRef.current) {
+      saveInputRef.current.focus();
+    }
+  }, [showSaveInput]);
+
+  // Ctrl+1 through Ctrl+9 for saved layouts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
+        const index = parseInt(e.key) - 1;
+        const matching = savedLayouts.filter(l => l.windowCount === windowCount);
+        if (index < matching.length) {
+          e.preventDefault();
+          onSelectLayout(matching[index].layoutData);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [savedLayouts, windowCount, onSelectLayout]);
+
   const handleButtonClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(!isOpen);
   };
+
+  const handleSaveLayout = async () => {
+    if (!savingName.trim() || !currentLayouts) return;
+    try {
+      const res = await fetch('/api/layouts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: savingName.trim(),
+          windowCount,
+          layoutData: currentLayouts,
+        }),
+      });
+      if (res.ok) {
+        setSavingName('');
+        setShowSaveInput(false);
+        fetchSavedLayouts();
+      }
+    } catch {
+      // Silently fail
+    }
+  };
+
+  const handleDeleteLayout = async (id: string) => {
+    try {
+      const res = await fetch(`/api/layouts/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchSavedLayouts();
+      }
+    } catch {
+      // Silently fail
+    }
+  };
+
+  const matchingSaved = savedLayouts.filter(l => l.windowCount === windowCount);
 
   return (
     <div className="relative">
@@ -231,9 +321,9 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
       </button>
 
       {isOpen && createPortal(
-        <div 
+        <div
           ref={dropdownRef}
-          className="fixed p-3 bg-[#0a0a0f] border border-[#27272a] rounded-lg shadow-xl z-[9999] min-w-[200px] animate-scale-in"
+          className="fixed p-3 bg-[#0a0a0f] border border-[#27272a] rounded-lg shadow-xl z-[9999] min-w-[200px] max-w-[320px] animate-scale-in"
           style={{ top: dropdownPos.top, right: dropdownPos.right }}
         >
           <div className="text-sm text-[#71717a] mb-2 font-medium">
@@ -248,8 +338,8 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
                   setIsOpen(false);
                 }}
                 className={`flex flex-col items-center gap-1.5 p-3 rounded-lg transition-all duration-150 ${
-                  currentLayoutId === preset.id 
-                    ? 'bg-[#00d4ff]/10 border border-[#00d4ff]/30' 
+                  currentLayoutId === preset.id
+                    ? 'bg-[#00d4ff]/10 border border-[#00d4ff]/30'
                     : 'hover:bg-[#27272a] border border-transparent'
                 }`}
               >
@@ -257,6 +347,87 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
                 <span className="text-[12px] text-[#a1a1aa] truncate w-full text-center">{preset.name}</span>
               </button>
             ))}
+          </div>
+
+          {matchingSaved.length > 0 && (
+            <div className="border-t border-[#27272a] mt-3 pt-2">
+              <div className="text-[11px] text-[#71717a] mb-1.5 font-medium uppercase tracking-wider">Saved</div>
+              <div className="flex flex-col gap-1">
+                {matchingSaved.map((layout, i) => (
+                  <div key={layout.id} className="flex items-center gap-1 group">
+                    <button
+                      onClick={() => {
+                        onSelectLayout(layout.layoutData);
+                        setIsOpen(false);
+                      }}
+                      className="flex-1 flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[#27272a] transition-colors text-left"
+                    >
+                      <LayoutPreview
+                        preset={{ id: layout.id, name: layout.name, layouts: layout.layoutData }}
+                        isActive={false}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[12px] text-[#d4d4d8] truncate block">{layout.name}</span>
+                        {i < 9 && (
+                          <span className="text-[10px] text-[#52525b]">Ctrl+{i + 1}</span>
+                        )}
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteLayout(layout.id)}
+                      className="p-1 text-[#52525b] hover:text-[#f87171] opacity-0 group-hover:opacity-100 transition-all rounded"
+                      title="Delete layout"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="border-t border-[#27272a] mt-3 pt-2">
+            {showSaveInput ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  ref={saveInputRef}
+                  type="text"
+                  value={savingName}
+                  onChange={(e) => setSavingName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveLayout();
+                    if (e.key === 'Escape') { setShowSaveInput(false); setSavingName(''); }
+                    e.stopPropagation();
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  placeholder="Layout name..."
+                  className="flex-1 text-[12px] text-white bg-[#1c1c26] border border-[#3f3f46] rounded px-2 py-1 outline-none focus:border-[#00d4ff]/40"
+                  maxLength={30}
+                />
+                <button
+                  onClick={handleSaveLayout}
+                  disabled={!savingName.trim()}
+                  className="p-1 text-[#00d4ff] hover:bg-[#00d4ff]/10 rounded disabled:opacity-30 disabled:cursor-default transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowSaveInput(true)}
+                disabled={!currentLayouts}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-[12px] text-[#a1a1aa] hover:text-[#00d4ff] hover:bg-[#27272a] rounded-md transition-colors disabled:opacity-30 disabled:cursor-default"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+                Save Current Layout
+              </button>
+            )}
           </div>
         </div>,
         document.body
@@ -266,4 +437,4 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
 }
 
 export { LAYOUT_PRESETS };
-export type { WindowLayout, LayoutPreset };
+export type { WindowLayout, LayoutPreset, SavedLayout };

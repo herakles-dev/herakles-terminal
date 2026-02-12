@@ -310,6 +310,76 @@ export function apiRoutes(store: SessionStore): Router {
     });
   });
 
+  // Layout presets
+  router.get('/layouts', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    const layouts = store.getUserLayouts(req.user.email);
+
+    res.json({
+      data: layouts.map(l => ({
+        id: l.id,
+        name: l.name,
+        windowCount: l.window_count,
+        layoutData: JSON.parse(l.layout_data),
+        isFavorite: l.is_favorite === 1,
+        createdAt: l.created_at,
+      })),
+    });
+  });
+
+  router.post('/layouts', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    const { name, windowCount, layoutData, isFavorite } = req.body || {};
+
+    if (!name || !windowCount || !layoutData || !Array.isArray(layoutData)) {
+      return res.status(400).json({
+        error: { code: 'INVALID_INPUT', message: 'name, windowCount, and layoutData array are required' },
+      });
+    }
+
+    const existing = store.getUserLayouts(req.user.email);
+    if (existing.length >= 50) {
+      return res.status(400).json({
+        error: { code: 'MAX_LAYOUTS', message: 'Maximum 50 saved layouts reached' },
+      });
+    }
+
+    const layout = store.createUserLayout({
+      id: randomUUID(),
+      user_email: req.user.email,
+      name,
+      window_count: windowCount,
+      layout_data: JSON.stringify(layoutData),
+      is_favorite: isFavorite ? 1 : 0,
+    });
+
+    res.status(201).json({
+      data: {
+        id: layout.id,
+        name: layout.name,
+        windowCount: layout.window_count,
+        layoutData: JSON.parse(layout.layout_data),
+        isFavorite: layout.is_favorite === 1,
+        createdAt: layout.created_at,
+      },
+    });
+  });
+
+  router.delete('/layouts/:id', (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Not authenticated' } });
+    }
+
+    store.deleteUserLayout(req.params.id, req.user.email);
+    res.json({ data: { success: true } });
+  });
+
   // Debug endpoint for minimap classification
   router.post('/debug/minimap', (req: Request, res: Response) => {
     const { lines, classifications } = req.body || {};

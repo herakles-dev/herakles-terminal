@@ -63,18 +63,30 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear
     e.preventDefault();
   }, []);
 
-  // Detect mobile for layout
+  // Detect mobile and orientation for layout
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const [isLandscape, setIsLandscape] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth > window.innerHeight
+  );
+
+  useEffect(() => {
+    const mql = window.matchMedia('(orientation: landscape)');
+    const handler = (e: MediaQueryListEvent) => setIsLandscape(e.matches);
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }, []);
 
   if (!visible) return null;
-  
+
   // Split keys into two rows for mobile layout
   const firstRowKeys = isMobile ? QUICK_KEYS.slice(0, 8) : QUICK_KEYS;
   const secondRowKeys = isMobile ? QUICK_KEYS.slice(8) : [];
 
   return (
-    <div 
+    <div
       className={`quick-key-bar safe-area-bottom px-3 py-2.5 bg-black/95 backdrop-blur-sm border-t border-[#27272a] fixed left-0 right-0 z-50 ${
+        isMobile && isLandscape ? 'quick-key-bar-mobile' : ''
+      } ${
         isMobile ? 'flex flex-col gap-2' : 'flex items-center gap-2 overflow-x-auto'
       }`}
       style={{ bottom: `${keyboardOffset}px` }}

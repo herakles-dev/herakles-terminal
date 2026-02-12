@@ -284,6 +284,18 @@ export function useRendererSetup(
         // Reset health monitor after successful recovery
         healthMonitor?.reset();
 
+        // Restore original scrollback if health is good after recovery
+        if (originalScrollbackRef.current !== null) {
+          const postRecoveryHealth = healthMonitor?.getMetrics().healthScore ?? 100;
+          if (postRecoveryHealth > 80) {
+            console.info(`[${terminalId}] Health score ${postRecoveryHealth} > 80, restoring scrollback to ${originalScrollbackRef.current}`);
+            term.options.scrollback = originalScrollbackRef.current;
+            originalScrollbackRef.current = null; // Reset so we re-capture on next loss
+          } else {
+            console.warn(`[${terminalId}] Health score ${postRecoveryHealth} <= 80, keeping reduced scrollback (${RECOVERY_SCROLLBACK_LIMIT})`);
+          }
+        }
+
         // FIX WG-3: Validate WebGL state after recovery
         const validation = validateWebGLState(term, terminalId);
         if (!validation.valid) {

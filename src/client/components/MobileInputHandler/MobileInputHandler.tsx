@@ -29,6 +29,30 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
       }
     }, [windowId]);
 
+    // Auto-focus input when enabled becomes true (opens mobile keyboard)
+    useEffect(() => {
+      if (enabled) {
+        requestAnimationFrame(() => {
+          inputRef.current?.focus();
+        });
+      }
+    }, [enabled]);
+
+    // Prevent iOS pull-to-refresh when at scroll top
+    useEffect(() => {
+      if (!enabled) return;
+
+      const handler = (e: TouchEvent) => {
+        // Block overscroll when scrolled to top (prevents pull-to-refresh)
+        if (document.documentElement.scrollTop <= 0 && e.touches[0]?.clientY > 0) {
+          e.preventDefault();
+        }
+      };
+
+      document.addEventListener('touchmove', handler, { passive: false });
+      return () => document.removeEventListener('touchmove', handler);
+    }, [enabled]);
+
     useImperativeHandle(ref, () => ({
       focus: () => inputRef.current?.focus(),
       blur: () => inputRef.current?.blur(),

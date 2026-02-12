@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)",
+      "Bash(docker restart:*)",
+      "Bash(curl:*)",
+      "Bash(jq:*)",
+      "Bash(docker ps:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [{"type": "command", "command": "/home/hercules/v9/hooks/detect-project"}]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {"type": "command", "command": "/home/hercules/v9/hooks/guard-task-state"},
+          {"type": "command", "command": "/home/hercules/v9/hooks/guard-plan-mode"},
+          {"type": "command", "command": "/home/hercules/v9/hooks/guard-autonomy"}
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "/home/hercules/v9/hooks/guard-risk"},
+          {"type": "command", "command": "/home/hercules/v9/hooks/guard-autonomy"},
+          {"type": "command", "command": "/home/hercules/v9/hooks/enforce-test-coverage"}
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [{"type": "command", "command": "/home/hercules/v9/hooks/guard-effort"}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {"type": "command", "command": "/home/hercules/v9/hooks/verify-syntax"},
+          {"type": "command", "command": "/home/hercules/v9/hooks/track-autonomy"}
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "/home/hercules/v9/hooks/track-autonomy"}]
+      },
+      {
+        "matcher": "TaskCreate|TaskUpdate|TaskList",
+        "hooks": [{"type": "command", "command": "/home/hercules/v9/hooks/sync-tasks"}]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [{"type": "command", "command": "/home/hercules/v9/hooks/track-agents"}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "command": "/home/hercules/v9/hooks/session-end"}]
+      }
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}

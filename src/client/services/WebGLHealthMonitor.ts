@@ -68,8 +68,8 @@ const HEALTH_THRESHOLDS = {
 // Penalty weights for health score calculation
 const PENALTIES = {
   CONTEXT_LOSS: 20, // -20 per recent context loss
-  SESSION_TIME_BASE: 15, // Minutes before fragmentation risk starts
-  SESSION_TIME_PENALTY: 2, // -2 per minute over base
+  SESSION_TIME_BASE: 60, // Minutes before fragmentation risk starts (tuned for Claude Code 1-3hr sessions)
+  SESSION_TIME_PENALTY: 1, // -1 per minute over base
   HIGH_FLUSH_RATE_THRESHOLD: 30, // Flushes/sec threshold
   HIGH_FLUSH_RATE_PENALTY: 1, // -1 per fps over threshold
   HIGH_BYTES_RATE_THRESHOLD: 150_000, // 150KB/sec threshold

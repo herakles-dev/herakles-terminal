@@ -104,6 +104,7 @@ export default function SplitView({
   const [dropZones, setDropZones] = useState<DropZone[]>([]);
   const [activeDropZone, setActiveDropZone] = useState<DropZone | null>(null);
   const [selectedWindows, setSelectedWindows] = useState<Set<string>>(new Set());
+  const [zoomedWindowId, setZoomedWindowId] = useState<string | null>(null);
   const [animating] = useState(false);
   const animationFrameRef = useRef<number | null>(null);
   const [flushGroup, setFlushGroup] = useState<Set<string>>(new Set());
@@ -184,6 +185,29 @@ export default function SplitView({
     return zones;
   }, []);
 
+  // Clear zoom if the zoomed window is closed or minimized
+  useEffect(() => {
+    if (zoomedWindowId && !visibleWindows.find(w => w.id === zoomedWindowId)) {
+      setZoomedWindowId(null);
+    }
+  }, [zoomedWindowId, visibleWindows]);
+
+  // Ctrl+Shift+Z to toggle zoom on active window
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'Z') {
+        e.preventDefault();
+        if (zoomedWindowId) {
+          setZoomedWindowId(null);
+        } else if (activeWindowId) {
+          setZoomedWindowId(activeWindowId);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [zoomedWindowId, activeWindowId]);
+
   useEffect(() => {
     if (!isMobile && visibleWindows.length > 1) {
       setDragZones(calculateDragZones(visibleWindows));
@@ -253,6 +277,14 @@ export default function SplitView({
       height: tempLayout.height,
     });
   }, [windows, onLayoutChange]);
+
+  const handleZoomToggle = useCallback((windowId: string) => {
+    setZoomedWindowId(prev => prev === windowId ? null : windowId);
+    // Trigger resize after zoom animation completes
+    setTimeout(() => {
+      resizeCoordinator?.triggerResize();
+    }, 250);
+  }, [resizeCoordinator]);
 
   const handleWindowClick = useCallback((e: React.MouseEvent, windowId: string) => {
     if (e.shiftKey) {
@@ -817,11 +849,17 @@ export default function SplitView({
         );
       })}
       
-      {windows.map((window) => (
+      {windows.map((window) => {
+        const isZoomed = zoomedWindowId === window.id;
+        const isHiddenByZoom = zoomedWindowId !== null && zoomedWindowId !== window.id;
+
+        return (
         <div
           key={window.id}
           className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden transition-all duration-200 ${
-            dropTarget === window.id
+            isZoomed
+              ? 'border-[#00d4ff]/60 shadow-[0_0_32px_rgba(0,212,255,0.15)] ring-1 ring-[#00d4ff]/20'
+              : dropTarget === window.id
               ? 'border-[#00d4ff] shadow-[0_0_40px_rgba(0,212,255,0.25),inset_0_1px_0_rgba(255,255,255,0.05)] scale-[0.98]'
               : flushGroup.has(window.id) && flushGroup.size > 1
               ? 'border-[#22c55e]/50 shadow-[0_0_20px_rgba(34,197,94,0.12)] ring-1 ring-[#22c55e]/30'
@@ -830,13 +868,13 @@ export default function SplitView({
               : activeWindowId === window.id
               ? 'border-[#00d4ff]/40 shadow-[0_0_24px_rgba(0,212,255,0.08),0_8px_32px_rgba(0,0,0,0.4)]'
               : 'border-white/[0.06] shadow-[0_4px_20px_rgba(0,0,0,0.3)]'
-          } ${window.isMinimized ? 'invisible pointer-events-none' : ''}`}
+          } ${window.isMinimized || isHiddenByZoom ? 'invisible pointer-events-none' : ''}`}
           style={{
-            left: `${window.x * 100}%`,
-            top: `${window.y * 100}%`,
-            width: `${window.width * 100}%`,
-            height: `${window.height * 100}%`,
-            zIndex: window.isMinimized ? -1 : window.zIndex + 10,
+            left: isZoomed ? 0 : `${window.x * 100}%`,
+            top: isZoomed ? 0 : `${window.y * 100}%`,
+            width: isZoomed ? '100%' : `${window.width * 100}%`,
+            height: isZoomed ? '100%' : `${window.height * 100}%`,
+            zIndex: isZoomed ? 9000 : window.isMinimized ? -1 : window.zIndex + 10,
           }}
           onClick={(e) => !window.isMinimized && handleWindowClick(e, window.id)}
         >
@@ -923,6 +961,25 @@ export default function SplitView({
                 </svg>
               </button>
               <button
+                onClick={(e) => { e.stopPropagation(); handleZoomToggle(window.id); }}
+                className={`p-1.5 rounded-md transition-all duration-150 ${
+                  zoomedWindowId === window.id
+                    ? 'text-[#00d4ff] bg-[#00d4ff]/10'
+                    : 'text-[#8a8a92] hover:text-[#00d4ff] hover:bg-[#00d4ff]/10'
+                }`}
+                title={zoomedWindowId === window.id ? 'Restore (Ctrl+Shift+Z)' : 'Zoom (Ctrl+Shift+Z)'}
+              >
+                {zoomedWindowId === window.id ? (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9L4 4m0 0v4m0-4h4m6 6l5 5m0 0v-4m0 4h-4" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 3h6m0 0v6m0-6l-7 7M9 21H3m0 0v-6m0 6l7-7" />
+                  </svg>
+                )}
+              </button>
+              <button
                 onClick={(e) => { e.stopPropagation(); onWindowClose(window.id); }}
                 className="p-1.5 text-[#8a8a92] hover:text-[#f87171] hover:bg-[#ef4444]/10 rounded-md transition-all duration-150"
               >
@@ -961,7 +1018,8 @@ export default function SplitView({
             onMouseDown={(e) => handleResizeStart(e, window, 'se')}
           />
         </div>
-      ))}
+        );
+      })}
 
       {minimizedWindows.length > 0 && (
         <div className="absolute bottom-3 left-3 flex gap-2" style={{ zIndex: 1000 }}>

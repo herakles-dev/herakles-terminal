@@ -1235,6 +1235,34 @@ export default function App() {
               setActiveWindowId(windows[idx].id);
             }
             break;
+          case 'l':
+          case 'L':
+            if (e.shiftKey) {
+              // Ctrl+Shift+L - cycle through layout presets
+              e.preventDefault();
+              const visCount = windows.filter(w => !w.isMinimized).length;
+              const availablePresets = LAYOUT_PRESETS[visCount] || LAYOUT_PRESETS[1];
+              if (availablePresets.length > 1) {
+                // Find current preset by comparing layouts
+                const visibleLayouts = windows.filter(w => !w.isMinimized).map(w => ({ x: w.x, y: w.y, width: w.width, height: w.height }));
+                let currentPresetIdx = -1;
+                for (let pi = 0; pi < availablePresets.length; pi++) {
+                  const preset = availablePresets[pi];
+                  if (preset.layouts.length === visibleLayouts.length) {
+                    const matches = preset.layouts.every((pl, li) =>
+                      Math.abs(pl.x - visibleLayouts[li].x) < 0.02 &&
+                      Math.abs(pl.y - visibleLayouts[li].y) < 0.02 &&
+                      Math.abs(pl.width - visibleLayouts[li].width) < 0.02 &&
+                      Math.abs(pl.height - visibleLayouts[li].height) < 0.02
+                    );
+                    if (matches) { currentPresetIdx = pi; break; }
+                  }
+                }
+                const nextIdx = (currentPresetIdx + 1) % availablePresets.length;
+                handleApplyLayout(availablePresets[nextIdx].layouts);
+              }
+            }
+            break;
           case 'i':
             if (e.shiftKey) {
               e.preventDefault();
@@ -1339,6 +1367,7 @@ export default function App() {
         <LayoutSelector
           windowCount={windows.filter(w => !w.isMinimized).length}
           onSelectLayout={handleApplyLayout}
+          currentLayouts={windows.filter(w => !w.isMinimized).map(w => ({ x: w.x, y: w.y, width: w.width, height: w.height }))}
         />
       </div>
     </>

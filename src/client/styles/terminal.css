@@ -262,15 +262,6 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
-@media (max-width: 480px) {
-  .quick-key {
-    min-width: 40px;
-    height: 36px;
-    padding: 0 8px;
-    font-size: 13px;
-  }
-}
-
 .quick-key:hover {
   background: linear-gradient(180deg, rgba(139, 92, 246, 0.2) 0%, rgba(0, 212, 255, 0.1) 100%);
   border-color: rgba(0, 212, 255, 0.4);
@@ -587,95 +578,7 @@ select:focus-visible {
   right: 0;
 }
 
-/* Touch feedback */
-@media (hover: none) {
-  .touch-feedback:active {
-    opacity: 0.7;
-    transform: scale(0.98);
-  }
-}
-
-/* Landscape mode for mobile */
-@media (max-width: 896px) and (orientation: landscape) {
-  .quick-key-bar-mobile {
-    position: fixed;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    flex-direction: column;
-    width: auto;
-    padding: 8px 4px;
-    border-radius: 8px 0 0 8px;
-    border-left: 1px solid rgba(107, 33, 168, 0.3);
-    border-top: none;
-    max-height: 80vh;
-    overflow-y: auto;
-  }
-  
-  .quick-key-bar-mobile .quick-key {
-    min-width: 36px;
-    height: 36px;
-    font-size: 13px;
-  }
-}
-
-/* Mobile stability enhancements */
-@media (max-width: 768px) {
-  html, body {
-    overscroll-behavior: none;
-    overflow: hidden;
-    position: fixed;
-    width: 100%;
-    height: 100%;
-  }
-  
-  #root {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    overflow: hidden;
-  }
-  
-  .terminal-wrapper {
-    flex: 1;
-    min-height: 0;
-    contain: strict;
-    overflow: hidden;
-  }
-  
-  .terminal-container {
-    contain: strict;
-    overflow: hidden;
-  }
-  
-  .terminal-container .xterm {
-    contain: layout style;
-  }
-  
-  .terminal-container .xterm-viewport {
-    contain: layout;
-    overscroll-behavior: none;
-  }
-}
-
-/* Keyboard open state */
-[data-keyboard-open="true"] {
-  .quick-key-bar {
-    position: fixed;
-    bottom: 0;
-    z-index: 9999;
-  }
-}
-
-/* Viewport stabilization during transitions */
-[data-viewport-stable="false"] {
-  .terminal-wrapper,
-  .terminal-container {
-    transition: none !important;
-  }
-}
+/* Mobile-specific styles are in terminal-mobile.css */
 
 /* Improved button styles */
 .btn {
@@ -930,13 +833,6 @@ select:focus-visible {
 
 .minimap-scroll-down {
   bottom: 8px;
-}
-
-/* Hide minimap on small screens */
-@media (max-width: 768px) {
-  .terminal-minimap {
-    display: none;
-  }
 }
 
 /* Side Panel Expand Button */

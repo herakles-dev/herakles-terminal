@@ -138,6 +138,16 @@ export interface TempArtifactRecord {
   expires_at: number;
 }
 
+export interface UserLayoutRecord {
+  id: string;
+  user_email: string;
+  name: string;
+  window_count: number;
+  layout_data: string; // JSON array of {x,y,width,height}
+  is_favorite: number;
+  created_at: number;
+}
+
 export class SessionStore {
   private db: Database.Database;
 
@@ -376,6 +386,22 @@ export class SessionStore {
           );
           CREATE INDEX IF NOT EXISTS idx_temp_artifacts_user ON temp_artifacts(user_email);
           CREATE INDEX IF NOT EXISTS idx_temp_artifacts_expires ON temp_artifacts(expires_at);
+        `,
+      },
+      {
+        version: '004_add_user_layouts',
+        sql: `
+          CREATE TABLE IF NOT EXISTS user_layouts (
+            id TEXT PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            name TEXT NOT NULL,
+            window_count INTEGER NOT NULL,
+            layout_data TEXT NOT NULL,
+            is_favorite INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_user_layouts_user ON user_layouts(user_email);
+          CREATE INDEX IF NOT EXISTS idx_user_layouts_window_count ON user_layouts(window_count);
         `,
       },
     ];
@@ -996,6 +1022,40 @@ export class SessionStore {
   cleanupExpiredTempArtifacts(): number {
     const result = this.db.prepare('DELETE FROM temp_artifacts WHERE expires_at < ?').run(Date.now());
     return result.changes;
+  }
+
+  // User Layouts
+  getUserLayouts(userEmail: string): UserLayoutRecord[] {
+    const stmt = this.db.prepare('SELECT * FROM user_layouts WHERE user_email = ? ORDER BY is_favorite DESC, name');
+    return stmt.all(userEmail) as UserLayoutRecord[];
+  }
+
+  createUserLayout(layout: Omit<UserLayoutRecord, 'created_at'>): UserLayoutRecord {
+    const record: UserLayoutRecord = {
+      ...layout,
+      created_at: Date.now(),
+    };
+
+    const stmt = this.db.prepare(`
+      INSERT INTO user_layouts (id, user_email, name, window_count, layout_data, is_favorite, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      record.id,
+      record.user_email,
+      record.name,
+      record.window_count,
+      record.layout_data,
+      record.is_favorite,
+      record.created_at
+    );
+
+    return record;
+  }
+
+  deleteUserLayout(id: string, userEmail: string): void {
+    const stmt = this.db.prepare('DELETE FROM user_layouts WHERE id = ? AND user_email = ?');
+    stmt.run(id, userEmail);
   }
 }
 

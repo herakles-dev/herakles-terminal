@@ -94,6 +94,8 @@ export function useResizeCoordinator() {
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationStateRef = useRef<AnimationState>({ isAnimating: false, pendingResize: false });
   const pendingResizesRef = useRef<Map<string, PendingResize>>(new Map());
+  // FIX: Resize lock to prevent concurrent fits from layout drag + browser resize
+  const isResizingRef = useRef(false);
 
   const isResizePending = useCallback((targetId: string): boolean => {
     const pending = pendingResizesRef.current.get(targetId);
@@ -189,6 +191,7 @@ export function useResizeCoordinator() {
 
             target.onResize(dims.cols, dims.rows);
           }
+
         } catch (e) {
           console.warn(`[ResizeCoordinator] Atomic resize failed for ${target.id}:`, e);
         }
@@ -236,11 +239,22 @@ export function useResizeCoordinator() {
         return;
       }
 
+      // FIX: Batch-level lock prevents concurrent resize batches
+      // (e.g., layout drag + browser resize firing simultaneously)
+      if (isResizingRef.current) {
+        return;
+      }
+      isResizingRef.current = true;
+
       requestAnimationFrame(() => {
         const targets = Array.from(targetsRef.current.values());
         for (const target of targets) {
           performAtomicResize(target);
         }
+        // Release lock after next RAF to ensure all paints complete
+        requestAnimationFrame(() => {
+          isResizingRef.current = false;
+        });
       });
     }, COALESCE_DEBOUNCE_MS);
   }, [performAtomicResize]);
@@ -252,6 +266,10 @@ export function useResizeCoordinator() {
       triggerResize();
     }
   }, [triggerResize]);
+
+  const isResizeLocked = useCallback((): boolean => {
+    return isResizingRef.current;
+  }, []);
 
   const getStats = useCallback(() => {
     return {
@@ -278,6 +296,7 @@ export function useResizeCoordinator() {
   return {
     register,
     triggerResize,
+    isResizeLocked,
     isResizePending,
     confirmResize,
     getStats,

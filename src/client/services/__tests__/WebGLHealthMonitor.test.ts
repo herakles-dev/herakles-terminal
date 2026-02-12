@@ -131,13 +131,13 @@ describe('WebGLHealthMonitor', () => {
 
   describe('Health Score Calculation', () => {
     it('should penalize for long sessions', () => {
-      // Advance 20 minutes (beyond 15 min base)
-      vi.advanceTimersByTime(20 * 60 * 1000);
+      // Advance 70 minutes (beyond 60 min base)
+      vi.advanceTimersByTime(70 * 60 * 1000);
 
       const metrics = monitor.getMetrics();
-      // Penalty: (20 - 15) * 2 = -10
+      // Penalty: (70 - 60) * 1 = -10
       expect(metrics.healthScore).toBe(90);
-      expect(metrics.sessionDurationMinutes).toBeCloseTo(20, 1);
+      expect(metrics.sessionDurationMinutes).toBeCloseTo(70, 1);
     });
 
     it('should penalize for high flush rate', () => {
@@ -167,14 +167,14 @@ describe('WebGLHealthMonitor', () => {
     });
 
     it('should apply cumulative penalties', () => {
-      // Advance 30 minutes first
-      vi.advanceTimersByTime(30 * 60 * 1000);
+      // Advance 90 minutes first (beyond 60 min base)
+      vi.advanceTimersByTime(90 * 60 * 1000);
 
       // Multiple factors:
       // 1. Context loss (recent, -20)
       monitor.recordContextLoss();
 
-      // 2. Long session (30 min, -30 penalty)
+      // 2. Long session (90 min, -30 penalty: (90-60)*1)
 
       // 3. High flush rate (50 fps = -20)
       for (let i = 0; i < 50; i++) {
@@ -207,7 +207,7 @@ describe('WebGLHealthMonitor', () => {
 
     it('should recommend reduce quality at 60-79 health', () => {
       // Advance time first, then add context loss
-      vi.advanceTimersByTime(25 * 60 * 1000); // 25 minutes = -20 penalty
+      vi.advanceTimersByTime(80 * 60 * 1000); // 80 minutes = -20 penalty ((80-60)*1)
       monitor.recordContextLoss(); // Recent loss = -20 penalty
       const metrics = monitor.getMetrics();
       // Should be 60 (-20 context, -20 session time)
@@ -216,11 +216,11 @@ describe('WebGLHealthMonitor', () => {
     });
 
     it('should recommend warn user at 40-59 health', () => {
-      // Three context losses = 40 score, but triggers reinit
-      // So use long session + one loss
-      monitor.recordContextLoss();
-      vi.advanceTimersByTime(40 * 60 * 1000); // 40 minutes
+      // Use long session + one loss to reach 40-59 range
+      vi.advanceTimersByTime(100 * 60 * 1000); // 100 minutes = -40 penalty ((100-60)*1)
+      monitor.recordContextLoss(); // -20 (must be AFTER time advance to stay within 5min recent window)
       const metrics = monitor.getMetrics();
+      // Score: 100 - 20 (loss) - 40 (session) = 40
       expect(metrics.recommendation).toBe('warn_user');
     });
 
@@ -411,20 +411,20 @@ describe('WebGLHealthMonitor', () => {
     });
 
     it('should degrade gracefully over long session', () => {
-      // Advance to 25 minutes
-      vi.advanceTimersByTime(25 * 60 * 1000);
+      // Advance to 85 minutes (beyond 60 min base)
+      vi.advanceTimersByTime(85 * 60 * 1000);
 
       // Add two recent context losses (within 5 min window)
       monitor.recordContextLoss();
       vi.advanceTimersByTime(2 * 60 * 1000); // 2 minutes later
       monitor.recordContextLoss();
 
-      // Advance to 30 minutes total
+      // Advance to 90 minutes total
       vi.advanceTimersByTime(3 * 60 * 1000);
 
       const metrics = monitor.getMetrics();
-      expect(metrics.sessionDurationMinutes).toBeCloseTo(30, 1);
-      // 2 recent context losses (-40) + 30 min session (-30) = 30 score
+      expect(metrics.sessionDurationMinutes).toBeCloseTo(90, 1);
+      // 2 recent context losses (-40) + 90 min session (-30) = 30 score
       expect(metrics.healthScore).toBeLessThanOrEqual(50);
       expect(metrics.recommendation).toBe('warn_user');
     });
