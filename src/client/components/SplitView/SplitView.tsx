@@ -417,8 +417,8 @@ export default function SplitView({
         let newX = Math.max(0, Math.min(1 - dragging.startLayout.width, dragging.startLayout.x + deltaX));
         let newY = Math.max(0, Math.min(1 - dragging.startLayout.height, dragging.startLayout.y + deltaY));
         
-        const mouseX = e.clientX / rect.width;
-        const mouseY = e.clientY / rect.height;
+        const mouseX = (e.clientX - rect.left) / rect.width;
+        const mouseY = (e.clientY - rect.top) / rect.height;
         
         const hoveredWindow = visibleWindows.find(w => {
           if (w.id === dragging.id) return false;
@@ -484,9 +484,11 @@ export default function SplitView({
         if (!win1 || !win2) return;
         
         if (activeDragZone.type === 'vertical') {
-          const mouseX = e.clientX / rect.width;
+          const mouseX = (e.clientX - rect.left) / rect.width;
+
           let newPosition = Math.max(win1.x + 0.15, Math.min(win2.x + win2.width - 0.15, mouseX));
-          newPosition = snapToGrid(newPosition);
+          // Snap disabled during drag for smoother feel - snaps on mouseup instead
+          // newPosition = snapToGrid(newPosition);
           
           const threshold = 0.02;
           
@@ -508,19 +510,20 @@ export default function SplitView({
           // Resize all left column windows - each gets wider/narrower by divider delta
           leftColumnWindows.forEach(w => {
             const newWidth = w.width + dividerDelta;
-            onLayoutChange(w.id, { x: w.x, y: w.y, width: newWidth, height: w.height });
+            onLayoutChange(w.id, { x: w.x, y: w.y, width: newWidth, height: w.height }, true);
           });
           
           // Resize all right column windows - each gets narrower/wider by divider delta (opposite)
           rightColumnWindows.forEach(w => {
             const newWidth = w.width - dividerDelta;
             const newX = w.x + dividerDelta;
-            onLayoutChange(w.id, { x: newX, y: w.y, width: newWidth, height: w.height });
+            onLayoutChange(w.id, { x: newX, y: w.y, width: newWidth, height: w.height }, true);
           });
         } else {
-          const mouseY = e.clientY / rect.height;
+          const mouseY = (e.clientY - rect.top) / rect.height;
           let newPosition = Math.max(win1.y + 0.15, Math.min(win2.y + win2.height - 0.15, mouseY));
-          newPosition = snapToGrid(newPosition);
+          // Snap disabled during drag for smoother feel - snaps on mouseup instead
+          // newPosition = snapToGrid(newPosition);
           
           const threshold = 0.02;
           
@@ -542,14 +545,14 @@ export default function SplitView({
           // Resize all top row windows - each gets taller/shorter by divider delta
           topRowWindows.forEach(w => {
             const newHeight = w.height + dividerDelta;
-            onLayoutChange(w.id, { x: w.x, y: w.y, width: w.width, height: newHeight });
+            onLayoutChange(w.id, { x: w.x, y: w.y, width: w.width, height: newHeight }, true);
           });
           
           // Resize all bottom row windows - each gets shorter/taller by divider delta (opposite)
           bottomRowWindows.forEach(w => {
             const newHeight = w.height - dividerDelta;
             const newY = w.y + dividerDelta;
-            onLayoutChange(w.id, { x: w.x, y: newY, width: w.width, height: newHeight });
+            onLayoutChange(w.id, { x: w.x, y: newY, width: w.width, height: newHeight }, true);
           });
         }
       }
@@ -616,6 +619,59 @@ export default function SplitView({
     };
 
     const handleMouseUp = () => {
+      // Snap drag zone dividers to grid on release for clean alignment
+      if (activeDragZone) {
+        const [win1Id, win2Id] = activeDragZone.affectedWindows;
+        const win1 = visibleWindows.find(w => w.id === win1Id);
+        const win2 = visibleWindows.find(w => w.id === win2Id);
+        
+        if (win1 && win2) {
+          if (activeDragZone.type === 'vertical') {
+            const currentPosition = win1.x + win1.width;
+            const snappedPosition = snapToGrid(currentPosition);
+            if (snappedPosition !== currentPosition) {
+              const dividerDelta = snappedPosition - currentPosition;
+              const threshold = 0.02;
+              const win1RightEdge = win1.x + win1.width;
+              const leftColumnWindows = visibleWindows.filter(w => 
+                Math.abs((w.x + w.width) - win1RightEdge) < threshold
+              );
+              const win2LeftEdge = win2.x;
+              const rightColumnWindows = visibleWindows.filter(w => 
+                Math.abs(w.x - win2LeftEdge) < threshold
+              );
+              leftColumnWindows.forEach(w => {
+                onLayoutChange(w.id, { x: w.x, y: w.y, width: w.width + dividerDelta, height: w.height });
+              });
+              rightColumnWindows.forEach(w => {
+                onLayoutChange(w.id, { x: w.x + dividerDelta, y: w.y, width: w.width - dividerDelta, height: w.height });
+              });
+            }
+          } else {
+            const currentPosition = win1.y + win1.height;
+            const snappedPosition = snapToGrid(currentPosition);
+            if (snappedPosition !== currentPosition) {
+              const dividerDelta = snappedPosition - currentPosition;
+              const threshold = 0.02;
+              const win1BottomEdge = win1.y + win1.height;
+              const topRowWindows = visibleWindows.filter(w => 
+                Math.abs((w.y + w.height) - win1BottomEdge) < threshold
+              );
+              const win2TopEdge = win2.y;
+              const bottomRowWindows = visibleWindows.filter(w => 
+                Math.abs(w.y - win2TopEdge) < threshold
+              );
+              topRowWindows.forEach(w => {
+                onLayoutChange(w.id, { x: w.x, y: w.y, width: w.width, height: w.height + dividerDelta });
+              });
+              bottomRowWindows.forEach(w => {
+                onLayoutChange(w.id, { x: w.x, y: w.y + dividerDelta, width: w.width, height: w.height - dividerDelta });
+              });
+            }
+          }
+        }
+      }
+      
       if (dropTarget && dragging && !activeDropZone) {
         handleWindowSwap(dragging.id, dropTarget);
       }
@@ -783,9 +839,9 @@ export default function SplitView({
           style={{
             [zone.type === 'vertical' ? 'left' : 'top']: `${zone.position * 100}%`,
             [zone.type === 'vertical' ? 'top' : 'left']: '0',
-            [zone.type === 'vertical' ? 'width' : 'height']: '8px',
+            [zone.type === 'vertical' ? 'width' : 'height']: '12px',
             [zone.type === 'vertical' ? 'height' : 'width']: '100%',
-            transform: zone.type === 'vertical' ? 'translateX(-4px)' : 'translateY(-4px)',
+            transform: zone.type === 'vertical' ? 'translateX(-6px)' : 'translateY(-6px)',
             zIndex: 1000,
           }}
           onMouseDown={(e) => handleDragZoneStart(e, zone)}
