@@ -47,8 +47,8 @@ const COALESCE_DEBOUNCE_MS = 100;
 const RESIZE_TIMEOUT_MS = 3000;
 const CANVAS_DIMENSION_TOLERANCE = 2;
 const TRANSITION_WAIT_TIMEOUT_MS = 300;
-const CANVAS_VERIFY_MAX_RETRIES = 3;
-const CANVAS_VERIFY_DELAYS = [16, 32, 64];
+const CANVAS_VERIFY_MAX_RETRIES = 5; // Increased for better reliability
+const CANVAS_VERIFY_DELAYS = [16, 32, 64, 100, 150]; // Extended delays
 
 /**
  * Verify WebGL canvas dimensions with retry and exponential backoff.
@@ -80,8 +80,17 @@ async function verifyWebGLCanvasSyncWithRetry(
     }
   }
 
-  // All retries exhausted
-  console.warn(`[ResizeCoordinator] Canvas sync failed after ${CANVAS_VERIFY_MAX_RETRIES} retries`);
+  // All retries exhausted - log detailed state
+  if (termElement) {
+    const rect = termElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const canvases = Array.from(termElement.querySelectorAll('canvas'));
+    console.error(
+      `[ResizeCoordinator] Canvas sync failed after ${CANVAS_VERIFY_MAX_RETRIES} retries\n` +
+      `  Container: ${rect.width}x${rect.height} (DPR: ${dpr})\n` +
+      `  Canvases: ${canvases.map(c => `${c.width}x${c.height}`).join(', ')}`
+    );
+  }
   return false;
 }
 

@@ -222,6 +222,27 @@ export class OutputPipelineManager {
     }
   }
 
+  /**
+   * Filter Claude Code thinking output from live data.
+   * Prevents dots and spinner characters from accumulating in the terminal.
+   * Matches the filter in TmuxManager.capturePane() for consistency.
+   */
+  private filterThinkingOutput(data: string): string {
+    return data
+      .split('\n')
+      .filter(line => {
+        // Strip ANSI escape sequences for analysis
+        const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
+        if (stripped.length === 0) return true; // Keep empty lines
+        // Filter lines that are ONLY dots (e.g. "....." or ". . . .")
+        if (/^[.\s]+$/.test(stripped)) return false;
+        // Filter braille spinner lines (U+2800-U+28FF)
+        if (/^[\u2800-\u28FF\s]+$/.test(stripped)) return false;
+        return true;
+      })
+      .join('\n');
+  }
+
   enqueue(windowId: string, data: string, seq?: number): void {
     const state = this.getOrCreateState(windowId);
 
@@ -240,8 +261,11 @@ export class OutputPipelineManager {
       return;
     }
 
+    // Filter Claude thinking output from live data
+    const filtered = this.filterThinkingOutput(data);
+
     if (state.resizePending) {
-      state.pendingResizeBuffer += data;
+      state.pendingResizeBuffer += filtered;
       // Enforce buffer limit for pending resize buffer too
       if (state.pendingResizeBuffer.length > MAX_BUFFER_SIZE) {
         const excess = state.pendingResizeBuffer.length - MAX_BUFFER_SIZE;
@@ -251,7 +275,7 @@ export class OutputPipelineManager {
       return;
     }
 
-    state.buffer += data;
+    state.buffer += filtered;
 
     // Enforce buffer size limit - keep newest data by trimming from the start
     if (state.buffer.length > MAX_BUFFER_SIZE) {
@@ -267,8 +291,8 @@ export class OutputPipelineManager {
       this.onBackpressure?.(windowId, true);
     }
 
-    // Track bytes for throttle calculation (now tracks on enqueue, not just flush)
-    state.bytesInWindow += data.length;
+    // Track bytes for throttle calculation (use filtered length)
+    state.bytesInWindow += filtered.length;
 
     this.scheduleFlush(windowId);
   }
