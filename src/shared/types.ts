@@ -4,6 +4,8 @@ export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'dis
 
 export type TriggerType = 'on_connect' | 'on_disconnect' | 'on_resume' | 'on_idle' | 'on_output_match' | 'scheduled';
 
+export type WindowType = 'terminal' | 'media';
+
 export interface Session {
   id: string;
   name: string;
@@ -17,11 +19,13 @@ export interface Session {
   workingDirectory: string;
   activeConnections: number;
   env: Record<string, string>;
+  watchToken?: string;  // Z.2.8.1: Token for read-only session watching
 }
 
 export interface Window {
   id: string;
   sessionId: string;
+  type: WindowType;
   name?: string;
   autoName?: string;
   positionX: number;
@@ -147,7 +151,7 @@ export type ClientMessage =
   | { type: 'take-control' }
   | { type: 'session:resume'; sessionId: string }
   | { type: 'session:create'; name?: string }
-  | { type: 'window:create'; sessionId: string }
+  | { type: 'window:create'; sessionId: string; windowType?: WindowType }
   | { type: 'window:close'; windowId: string }
   | { type: 'window:focus'; windowId: string }
   | { type: 'window:send'; windowId: string; data: string }
@@ -186,7 +190,18 @@ export type ServerMessageType =
   | 'window:replay-response'
   | 'file:uploaded'
   | 'file:deleted'
+  | 'artifact:history'
   | 'error';
+
+export interface ArtifactMetadata {
+  id: string;
+  title: string;
+  type: string;
+  language?: string;
+  timestamp: number;
+  thumbnail?: string;  // First 200 chars as preview
+  tags?: string[];
+}
 
 export type ServerMessage =
   | { type: 'auth-success'; sessionId: string; token: string; sessions?: Session[] }
@@ -217,6 +232,7 @@ export type ServerMessage =
   | { type: 'automation:completed'; automationId: string; success: boolean; output?: string }
   | { type: 'file:uploaded'; file: UploadedFile }
   | { type: 'file:deleted'; fileId: string; filename: string }
+  | { type: 'artifact:history'; artifacts: ArtifactMetadata[] }
   | { type: 'error'; code: string; message: string };
 
 export interface OptimizationStats {

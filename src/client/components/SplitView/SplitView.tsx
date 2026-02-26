@@ -6,6 +6,7 @@ import type { ContextUsage } from '../../../shared/contextProtocol';
 interface WindowConfig {
   id: string;
   name: string;
+  type: 'terminal' | 'media';
   x: number;
   y: number;
   width: number;
@@ -49,7 +50,7 @@ interface SplitViewProps {
   onAddWindow: () => void;
   onWindowRename?: (id: string, name: string) => void;
   onLayoutsChange?: (layouts: WindowLayout[]) => void;
-  renderTerminal: (windowId: string, isFocused: boolean) => React.ReactNode;
+  renderWindow: (windowId: string, isFocused: boolean, windowType: 'terminal' | 'media') => React.ReactNode;
   sidePanelOpen?: boolean;
   sidePanelExpanded?: boolean;
   minimapVisible?: boolean;
@@ -82,7 +83,7 @@ export default function SplitView({
   onAddWindow,
   onWindowRename,
   onLayoutsChange: _onLayoutsChange,
-  renderTerminal,
+  renderWindow,
   sidePanelOpen = false,
   sidePanelExpanded = false,
   minimapVisible = false,
@@ -116,6 +117,10 @@ export default function SplitView({
     position: number;
     affectedWindows: [string, string];
   } | null>(null);
+  // Suppress CSS transitions during resize completion so fitAddon.fit() sees final dimensions instantly.
+  // Without this, the 200ms transition-all animation on window containers causes fitAddon.fit() to
+  // measure intermediate sizes, resulting in dark gaps when expanding terminals.
+  const [suppressTransitions, setSuppressTransitions] = useState(false);
 
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -690,11 +695,16 @@ export default function SplitView({
         }
 
         setSnapGuides(guides);
-        onLayoutChange(resizing.id, { x: newX, y: newY, width: newWidth, height: newHeight });
+        onLayoutChange(resizing.id, { x: newX, y: newY, width: newWidth, height: newHeight }, true);
       }
     };
 
     const handleMouseUp = () => {
+      // Suppress CSS transitions so containers jump to final size instantly.
+      // This prevents fitAddon.fit() from measuring intermediate animated dimensions,
+      // which causes dark gaps when expanding terminals.
+      setSuppressTransitions(true);
+
       // Apply divider preview to actual layouts on mouseup
       if (activeDragZone && dividerPreview) {
         const [win1Id, win2Id] = dividerPreview.affectedWindows;
@@ -715,11 +725,11 @@ export default function SplitView({
         // Clear preview state
         setDividerPreview(null);
       }
-      
+
       if (dropTarget && dragging && !activeDropZone) {
         handleWindowSwap(dragging.id, dropTarget);
       }
-      
+
       if (activeDropZone && dragging) {
         const targetWindow = visibleWindows.find(w => w.id === activeDropZone.targetId);
         if (targetWindow) {
@@ -727,7 +737,7 @@ export default function SplitView({
           onLayoutChange(dragging.id, activeDropZone.preview.dragged);
         }
       }
-      
+
       if (dragging && dragging.flushStartLayouts.size > 0) {
         dragging.flushStartLayouts.forEach((_, windowId) => {
           const currentWindow = visibleWindows.find(w => w.id === windowId);
@@ -741,7 +751,7 @@ export default function SplitView({
           }
         });
       }
-      
+
       setDragging(null);
       setResizing(null);
       setActiveDragZone(null);
@@ -757,11 +767,16 @@ export default function SplitView({
       setDropZones([]);
       setActiveDropZone(null);
       setFlushGroup(new Set());
-      
-      // Trigger resize after drag/resize complete (single batch resize)
-      setTimeout(() => {
-        resizeCoordinator?.triggerResize();
-      }, 100); // Small delay to ensure all layout updates have settled
+
+      // Immediate resize — no delay needed since transitions are suppressed.
+      // Container is already at final size, so fitAddon.fit() gets correct dimensions.
+      requestAnimationFrame(() => {
+        resizeCoordinator?.triggerResize(true); // immediate=true, skip debounce
+        // Re-enable transitions after resize completes
+        requestAnimationFrame(() => {
+          setSuppressTransitions(false);
+        });
+      });
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -842,7 +857,7 @@ export default function SplitView({
                     bottom: 0
                   }}
                 >
-                  {renderTerminal(window.id, window.id === activeWindow.id)}
+                  {renderWindow(window.id, window.id === activeWindow.id, window.type || 'terminal')}
                 </div>
               ))}
             </div>
@@ -979,7 +994,7 @@ export default function SplitView({
         return (
         <div
           key={window.id}
-          className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden transition-all duration-200 ${
+          className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden ${suppressTransitions ? '' : 'transition-all duration-200'} ${
             isZoomed
               ? 'border-[#00d4ff]/60 shadow-[0_0_32px_rgba(0,212,255,0.15)] ring-1 ring-[#00d4ff]/20'
               : dropTarget === window.id
@@ -1121,7 +1136,7 @@ export default function SplitView({
               }
             }}
           >
-            {renderTerminal(window.id, activeWindowId === window.id)}
+            {renderWindow(window.id, activeWindowId === window.id, window.type || 'terminal')}
           </div>
 
           <div

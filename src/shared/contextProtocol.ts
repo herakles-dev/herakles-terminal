@@ -41,9 +41,21 @@ export interface ContextSyncMessage {
   usage: ContextUsage | null;
 }
 
+// Warning thresholds for toast notifications (percentage)
+export const CONTEXT_WARNING_THRESHOLDS = [90, 95, 98] as const;
+export type ContextWarningLevel = (typeof CONTEXT_WARNING_THRESHOLDS)[number];
+
+export interface ContextWarningMessage {
+  type: 'context:warning';
+  windowId: string;
+  usage: ContextUsage;
+  threshold: ContextWarningLevel;
+  message: string;
+}
+
 // Union types for message handling
 export type ContextClientMessage = ContextSubscribeMessage | ContextUnsubscribeMessage;
-export type ContextServerMessage = ContextUpdateMessage | ContextSyncMessage;
+export type ContextServerMessage = ContextUpdateMessage | ContextSyncMessage | ContextWarningMessage;
 
 // Default context limits by model
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { IncomingMessage } from 'http';
+import { config } from '../config.js';
 
 export interface AutheliaUser {
   username: string;
@@ -26,7 +27,10 @@ function isFromTrustedProxy(req: Request | IncomingMessage): boolean {
     return false;
   }
 
-  const trustedAddresses = ['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost'];
+  const trustedAddresses = [
+    '127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost',
+    ...config.security.trustedProxies,
+  ];
   return trustedAddresses.some(addr => remoteAddress.includes(addr));
 }
 

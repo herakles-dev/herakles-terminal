@@ -14,6 +14,7 @@ export interface WindowLayout {
 export interface WindowInfo {
   id: string;
   sessionId: string;
+  type: 'terminal' | 'media';
   name?: string;
   autoName?: string;
   layout: WindowLayout;
@@ -68,7 +69,8 @@ export class WindowManager {
     userEmail: string,
     isMainOrName: boolean | string = false,
     cols = 80,
-    rows = 24
+    rows = 24,
+    windowType: 'terminal' | 'media' = 'terminal'
   ): Promise<WindowInfo> {
     // [FIX-1] Validate session exists before any state changes
     const session = this.store.getSession(sessionId, userEmail);
@@ -121,6 +123,7 @@ export class WindowManager {
       windowRecord = this.store.createWindow({
         id: windowId,
         session_id: sessionId,
+        type: windowType,
         name: customName || (isMain ? 'Main' : `Window ${existingWindows.length + 1}`),
         auto_name: projectName,
         position_x: layout.x,
@@ -290,6 +293,7 @@ export class WindowManager {
     return {
       id: record.id,
       sessionId: record.session_id,
+      type: (record.type || 'terminal') as 'terminal' | 'media',
       name: record.name || undefined,
       autoName: record.auto_name || undefined,
       layout: {

@@ -2,7 +2,7 @@
 
 > A resilient, mobile-first web terminal for Claude Code power users
 
-**Status:** 🟡 Active Development - Display Quality Improvements in Progress
+**Version:** 1.1.0 | **Status:** ✅ Production Ready - Media Windows Integration
 
 Zeus Terminal is a self-hosted web-based terminal that replaces Termux for remote SSH access. It provides:
 
@@ -13,26 +13,16 @@ Zeus Terminal is a self-hosted web-based terminal that replaces Termux for remot
 
 ---
 
-## 📚 Documentation
+## Documentation
 
-**Start here:** [`ANALYSIS_INDEX.md`](./ANALYSIS_INDEX.md) - Complete navigation guide
-
-### Quick Links by Role
-
-**🏢 Managers/Stakeholders:**
-- [`EXECUTIVE_SUMMARY.md`](./EXECUTIVE_SUMMARY.md) - 5-minute overview of current state and plan
-
-**👨‍💻 Developers:**
-- [`QUICK_FIX_CHECKLIST.md`](./QUICK_FIX_CHECKLIST.md) - Step-by-step implementation guide
-- [`DEVELOPMENT_GUIDE.md`](./DEVELOPMENT_GUIDE.md) - Development workflows
-
-**🏗️ Tech Leads/Architects:**
-- [`5_WHYS_ROOT_CAUSE_ANALYSIS.md`](./5_WHYS_ROOT_CAUSE_ANALYSIS.md) - Deep dive root cause analysis
-- [`CODE_REVIEW_REPORT.md`](./CODE_REVIEW_REPORT.md) - Security & code quality review
-
-**🛠️ Operations:**
-- [`DEBUGGING_GUIDE.md`](./DEBUGGING_GUIDE.md) - Troubleshooting and diagnostics
-- [`SECURITY.md`](./SECURITY.md) - Security guidelines
+- [`CLAUDE.md`](./CLAUDE.md) - Development context and quick reference
+- [`SECURITY.md`](./SECURITY.md) - Security guidelines and deployment checklist
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) - System architecture
+- [`docs/CANVAS.md`](./docs/CANVAS.md) - Artifact system reference
+- [`docs/MEDIA_WINDOWS_IMPLEMENTATION.md`](./docs/MEDIA_WINDOWS_IMPLEMENTATION.md) - v1.1.0 media windows
+- [`docs/guides/DEVELOPMENT_GUIDE.md`](./docs/guides/DEVELOPMENT_GUIDE.md) - Development workflows
+- [`docs/guides/DEBUGGING_GUIDE.md`](./docs/guides/DEBUGGING_GUIDE.md) - Troubleshooting
+- [`docs/archive/`](./docs/archive/) - Historical documentation
 
 ---
 
@@ -122,68 +112,60 @@ See `.env.example` for all options.
 
 ## 📊 Project Status
 
-### Current State (Dec 18, 2025)
+### Release History
 
-**Phase:** Display Quality Improvements  
-**Status:** 🟡 In Progress  
-**Goal:** Fix dotted lines and visual glitches after resize
+**v1.1.0 (February 13, 2026)** - Media Windows Integration ✅
+- Type-based window system (`WindowType = 'terminal' | 'media'`)
+- YouTube player can render as SplitView window
+- Floating ↔ Window mode toggle with seamless state transitions
+- Smart mixed layouts (terminals grid + media bottom-right)
+- 345/345 tests passing, zero regressions
+- Database migration 006, full backward compatibility
+
+**v1.0.0 (February 12, 2026)** - Production Feature Complete ✅
+- 7 major features shipped (template toolbar, welcome page, token tracking, enhanced tasks, dockable player, fullscreen canvas, artifact history)
+- 345/345 tests passing (+137 new tests)
+- V9 Agent Teams formation execution (4.5 hours)
+- Zero regressions, TypeScript strict mode maintained
+
+**v0.3.0 (January 2026)** - Terminal Stability Overhaul ✅
+- 17 fixes across 13 files (183/183 tests passing)
+- WebGL scrolling fix, atomic tmux resize, layout schema fix
+- Multiwindow drag improvements (smooth resize-on-release)
+- Net -155 lines (code reduction)
+
+**v0.2.0 (December 2025)** - Display Quality & Architecture ✅
+- 4 sprints completed (resize coordination, rendering optimization, ANSI handling, architecture refactor)
+- Created reusable hooks (useTerminalCore, useXTermSetup, useRendererSetup)
+- 95% reduction in visual glitches, 4x performance improvement
 
 ### Completed Phases
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| Phase 1 | ✅ Complete | Core terminal MVP |
-| Phase 2 | ✅ Complete | Mobile UX (QuickKeyBar, touch gestures) |
-| Phase 3 | ✅ Complete | Multi-device sync, session persistence |
-| Phase 4 | ✅ Complete | Production hardening (auth, CSRF, rate limiting) |
-| Phase 5 | ✅ Complete | Advanced UX (minimap, split view, command builder) |
-
-### Current Work: Display Quality Improvements (Phase 1 Complete!)
-
-**✅ Sprint 1 Complete:** Resize Coordination (Dec 18, 2025)
-- Centralized resize handling with useResizeCoordinator hook
-- 95% reduction in dotted lines during resize
-- Coordinated multi-window resize events
-- See: [`CHECKPOINT_SPRINT_1.md`](./CHECKPOINT_SPRINT_1.md)
-
-**✅ Sprint 2 Complete:** Rendering Optimization (Dec 18, 2025)
-- Fixed Canvas addon initialization timing bug
-- Added WebGL → Canvas → DOM fallback chain
-- 4x performance improvement (DOM → Canvas/WebGL)
-- 100% Canvas/WebGL activation rate (from ~50% silent DOM fallback)
-- See: [`CHECKPOINT_SPRINT_2.md`](./CHECKPOINT_SPRINT_2.md)
-
-**✅ Sprint 3 Complete:** ANSI & Output Handling (Dec 18, 2025)
-- Removed custom ANSI chunking logic (-25 lines, -89% complexity)
-- Direct XTerm.js write (trusts built-in buffering)
-- Eliminated ANSI escape sequence corruption
-- Added observability logging for large outputs
-- See: [`CHECKPOINT_SPRINT_3.md`](./CHECKPOINT_SPRINT_3.md)
-
-**🎯 Phase 1 Complete:** All critical fixes finished (16 hours)  
-**🎯 Phase 2 Complete:** Architecture refactor finished (40 hours)
-
-**✅ Sprint 4 Complete:** Architecture Refactor (Dec 18, 2025)
-- Created 3 reusable hooks (useTerminalCore, useXTermSetup, useRendererSetup)
-- Created TerminalCore unified component (single source of truth)
-- Refactored Terminal.tsx: 346 → 238 lines (-31%)
-- Refactored TerminalView.tsx: 184 → 42 lines (-77%)
-- Eliminated code duplication: 30% → 0%
-- See: [`CHECKPOINT_SPRINT_4.md`](./CHECKPOINT_SPRINT_4.md)
-
-**🟡 Next:** Sprint 5 - Testing & Observability (24 hours)
-- Unit tests for 3 new hooks
-- Integration tests for TerminalCore
-- >80% test coverage target
-- Observability logging
-
-**Overall Progress:** 56 hours / 112 hours (50% complete) 🎉
-
-**See:** [`SESSION_4_SUMMARY.md`](./SESSION_4_SUMMARY.md) for complete session details
+| Phase 1-5 | ✅ Complete | Core MVP → Production hardening |
+| Phase 6 | ✅ Complete | Display quality improvements (v0.2.0) |
+| Phase 7 | ✅ Complete | Terminal stability overhaul (v0.3.0) |
+| Phase 8 | ✅ Complete | Production feature set (v1.0.0) |
 
 ---
 
 ## 🎯 Features
+
+### v1.1.0 New Features (February 2026)
+- 🪟 **Media Windows** - YouTube player can render as SplitView window alongside terminals
+- 🔄 **Mode Toggle** - Seamless floating ↔ window transitions with "Dock to Window" button
+- 📐 **Type-Based Layouts** - Smart auto-layout for mixed terminal + media window types
+- 💾 **State Persistence** - Playback continues uninterrupted during mode switches
+
+### v1.0.0 Features (February 2026)
+- ✨ **Icon Template Toolbar** - 88 command templates accessible via 9 icon categories with hover dropdowns
+- ⚡ **Lightning Welcome Page** - Animated welcome screen with feature cards and keyboard shortcuts
+- 📊 **Per-Window Token Tracking** - Accurate Claude Code context usage per terminal with toast warnings at 90/95/98%
+- ✨ **Enhanced Tasks Panel** - Resizable width (200-400px), vertical progress bars, status badges, metadata chips
+- 🎵 **Dockable YouTube Player** - Snap-to-corner positioning with 4 dock zones, drag-to-resize, multi-device sync
+- 🎨 **Fullscreen Canvas Mode** - Toolbar access + Ctrl+Shift+A shortcut, artifact navigation, download functionality
+- 📚 **Artifact History System** - 50-artifact cache with thumbnails, auto-tagging, WebSocket sync
 
 ### Core Features
 - ✅ Server-side tmux sessions (persistent across disconnects)
@@ -207,6 +189,7 @@ See `.env.example` for all options.
 - ✅ Layout presets (single, split, quad, etc.)
 - ✅ Automation engine (cron triggers, output patterns)
 - ✅ File uploads to session
+- ✅ Claude Code integration (TodoPanel, token counter, canvas artifacts)
 
 ### Security
 - ✅ Authelia authentication
@@ -282,65 +265,23 @@ npm run test:coverage
 
 ---
 
-## 🐛 Known Issues & Fixes
+## Known Issues
 
-**Current Issue:** Dotted lines and visual glitches after resize (especially with multiple windows)
+All major issues have been resolved:
 
-**Status:** Root cause identified, fixes in progress
-
-**Tracking:** See [`5_WHYS_ROOT_CAUSE_ANALYSIS.md`](./5_WHYS_ROOT_CAUSE_ANALYSIS.md)
-
-**Timeline:**
-- ✅ Analysis complete (Dec 18, 2025)
-- 🟡 Phase 1 fixes (16 hours) - In progress
-- ⏳ Phase 2-4 (96 hours) - Planned
+- ✅ **Resize dot glitch** - Fixed Feb 25, 2026 (CSS transition suppression + shared filter module)
+- ✅ **Terminal pulsing** - Fixed Feb 17, 2026 (ref-stabilized renderWindow)
+- ✅ **Multiwindow drag** - Fixed Feb 12, 2026 (smooth resize-on-release)
+- ✅ **WebGL stability** - Fixed Jan 2026 (17 fixes across 13 files)
 
 ---
 
-## 📖 Additional Documentation
-
-**Current Documentation:**
-- [`ANALYSIS_INDEX.md`](./ANALYSIS_INDEX.md) - Complete documentation index
-- [`EXECUTIVE_SUMMARY.md`](./EXECUTIVE_SUMMARY.md) - Management overview
-- [`5_WHYS_ROOT_CAUSE_ANALYSIS.md`](./5_WHYS_ROOT_CAUSE_ANALYSIS.md) - Deep technical analysis
-- [`QUICK_FIX_CHECKLIST.md`](./QUICK_FIX_CHECKLIST.md) - Implementation guide
-- [`CODE_REVIEW_REPORT.md`](./CODE_REVIEW_REPORT.md) - Security review
-- [`PERFORMANCE_ANALYSIS_REPORT.md`](./PERFORMANCE_ANALYSIS_REPORT.md) - Performance analysis
-- [`DEBUGGING_GUIDE.md`](./DEBUGGING_GUIDE.md) - Operational guide
-- [`DEVELOPMENT_GUIDE.md`](./DEVELOPMENT_GUIDE.md) - Developer guide
-- [`SECURITY.md`](./SECURITY.md) - Security guidelines
-
-**Historical Documentation:**
-- [`docs/archive/`](./docs/archive/) - Archived documents (superseded analysis)
-
----
-
-## 🤝 Contributing
-
-This is a private project for the Hercules Platform. For contributions:
-
-1. Read [`DEVELOPMENT_GUIDE.md`](./DEVELOPMENT_GUIDE.md)
-2. Check [`ANALYSIS_INDEX.md`](./ANALYSIS_INDEX.md) for current work
-3. Follow the coding standards in [`CODE_REVIEW_REPORT.md`](./CODE_REVIEW_REPORT.md)
-
----
-
-## 📜 License
+## License
 
 Private - Hercules Platform
 
 ---
 
-## 🆘 Support
-
-**Issues:** Check [`DEBUGGING_GUIDE.md`](./DEBUGGING_GUIDE.md) first
-
-**Questions:** See [`ANALYSIS_INDEX.md`](./ANALYSIS_INDEX.md) for topic-specific docs
-
-**Status:** [`EXECUTIVE_SUMMARY.md`](./EXECUTIVE_SUMMARY.md) has current project status
-
----
-
-**Last Updated:** December 18, 2025  
-**Version:** 0.1.0  
-**Maintained by:** Zeus Terminal Development Team
+**Last Updated:** February 26, 2026
+**Version:** 1.1.0
+**Author:** Hercules <noreply@herakles.dev>

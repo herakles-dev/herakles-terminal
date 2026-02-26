@@ -1,4 +1,8 @@
-const API_BASE = '/api';
+export const API_BASE = (window as any).__ZEUS_API_BASE__ || '/api';
+
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
 
 interface ApiError {
   code: string;

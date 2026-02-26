@@ -1,3 +1,5 @@
+import { apiUrl } from './api';
+
 interface UploadProgress {
   fileId: string;
   filename: string;
@@ -95,7 +97,7 @@ class UploadService {
       formData.append('files', file);
 
       // Get CSRF token first
-      fetch('/api/csrf-token', { credentials: 'include' })
+      fetch(apiUrl('/csrf-token'), { credentials: 'include' })
         .then(res => res.json())
         .then(data => {
           xhr.upload.onprogress = (event) => {
@@ -136,7 +138,7 @@ class UploadService {
           xhr.onerror = () => reject(new Error('Network error'));
           xhr.onabort = () => reject(new Error('Upload cancelled'));
 
-          xhr.open('POST', '/api/uploads');
+          xhr.open('POST', apiUrl('/uploads'));
           xhr.withCredentials = true;
           if (data.data?.token) {
             xhr.setRequestHeader('x-csrf-token', data.data.token);

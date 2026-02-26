@@ -13,6 +13,9 @@ export class SessionManager {
     }
 
     const id = uuidv4();
+    // Z.2.8.1: Generate watch token for read-only session sharing
+    const watchToken = crypto.randomUUID();
+
     const session: Session = {
       id,
       name: name || `Session ${this.sessions.size + 1}`,
@@ -22,9 +25,10 @@ export class SessionManager {
       lastActiveAt: new Date(),
       state: 'active',
       timeoutHours: config.session.defaultTimeout,
-      workingDirectory: '/home/hercules',
+      workingDirectory: process.env.HOME || '/home/hercules',
       activeConnections: 1,
       env: {},
+      watchToken,
     };
 
     this.sessions.set(id, session);
@@ -75,6 +79,16 @@ export class SessionManager {
     });
 
     return token;
+  }
+
+  // Z.2.8.1: Find session by watch token for read-only access
+  getSessionByWatchToken(watchToken: string): Session | null {
+    for (const session of this.sessions.values()) {
+      if (session.watchToken === watchToken && session.state === 'active') {
+        return session;
+      }
+    }
+    return null;
   }
 
   updateSessionActivity(sessionId: string): void {

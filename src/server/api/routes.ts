@@ -53,7 +53,7 @@ export function apiRoutes(store: SessionStore): Router {
       user_email: req.user.email,
       auto_name: null,
       timeout_hours: 168,
-      working_directory: '/home/hercules',
+      working_directory: process.env.HOME || '/home/hercules',
     });
 
     res.status(201).json({

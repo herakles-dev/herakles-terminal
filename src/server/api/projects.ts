@@ -44,8 +44,8 @@ interface AppsRegistry {
   categories: Record<string, { label: string }>;
 }
 
-const HERCULES_HOME = '/home/hercules';
-const APPS_REGISTRY_PATH = '/home/hercules/system-apps-config/APPS_REGISTRY.json';
+const HERCULES_HOME = process.env.HOME || '/home/hercules';
+const APPS_REGISTRY_PATH = process.env.APPS_REGISTRY_PATH || `${HERCULES_HOME}/system-apps-config/APPS_REGISTRY.json`;
 
 const EXCLUDED_DIRS = new Set([
   'node_modules',

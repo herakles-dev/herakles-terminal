@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { apiClient } from '../../services/api';
+import { apiClient, apiUrl } from '../../services/api';
 
 interface UploadedFile {
   filename: string;
@@ -223,7 +223,7 @@ export default function UploadPanel() {
                   <div className="flex-shrink-0">
                     {file.hasThumbnail ? (
                       <img
-                        src={`/api/uploads/${file.date}/${file.filename}/thumbnail`}
+                        src={apiUrl(`/uploads/${file.date}/${file.filename}/thumbnail`)}
                         alt={file.filename}
                         className="w-10 h-10 object-cover rounded"
                       />
@@ -245,7 +245,7 @@ export default function UploadPanel() {
 
                   <div className="flex gap-1">
                     <a
-                      href={`/api/uploads/${file.date}/${file.filename}`}
+                      href={apiUrl(`/uploads/${file.date}/${file.filename}`)}
                       download
                       className="p-1.5 text-[#71717a] hover:text-[#00b8db] transition-colors"
                       onClick={(e) => e.stopPropagation()}

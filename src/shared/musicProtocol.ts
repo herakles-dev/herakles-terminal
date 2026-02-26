@@ -5,6 +5,22 @@
 // Player display modes
 export type MusicPlayerMode = 'hidden' | 'mini' | 'audio' | 'video';
 
+// Dock position presets
+export type DockPosition = 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right' | 'floating';
+
+// Dock layout state (persisted independently from player state)
+export interface MusicDockState {
+  position: DockPosition;
+  size: { width: number; height: number };
+  collapsed: boolean;
+}
+
+export const DEFAULT_DOCK_STATE: MusicDockState = {
+  position: 'bottom-right',
+  size: { width: 320, height: 180 },
+  collapsed: false,
+};
+
 // Starred video entry for playlist
 export interface StarredVideo {
   videoId: string;
@@ -65,11 +81,17 @@ export interface MusicUnsubscribeMessage {
   type: 'music:unsubscribe';
 }
 
+export interface MusicDockUpdateMessage {
+  type: 'music:dock:update';
+  state: MusicDockState;
+}
+
 export type MusicClientMessage =
   | MusicSyncMessage
   | MusicLoadMessage
   | MusicSubscribeMessage
-  | MusicUnsubscribeMessage;
+  | MusicUnsubscribeMessage
+  | MusicDockUpdateMessage;
 
 // ============================================
 // Server → Client Messages
@@ -86,7 +108,12 @@ export interface MusicErrorMessage {
   message: string;
 }
 
-export type MusicServerMessage = MusicStateMessage | MusicErrorMessage;
+export interface MusicDockRestoreMessage {
+  type: 'music:dock:restore';
+  state: MusicDockState;
+}
+
+export type MusicServerMessage = MusicStateMessage | MusicErrorMessage | MusicDockRestoreMessage;
 
 // ============================================
 // YouTube URL Parsing Utilities

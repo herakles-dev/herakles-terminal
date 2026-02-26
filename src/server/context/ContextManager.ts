@@ -12,7 +12,10 @@ import type {
   ContextUsage,
   ContextSyncMessage,
   ContextUpdateMessage,
+  ContextWarningMessage,
+  ContextWarningLevel,
 } from '../../shared/contextProtocol.js';
+import { CONTEXT_WARNING_THRESHOLDS } from '../../shared/contextProtocol.js';
 import { logger } from '../utils/logger.js';
 import { contextFileWatcher, ContextUpdateEvent, ContextByProject } from './ContextFileWatcher.js';
 import type { TmuxManager } from '../tmux/TmuxManager.js';
@@ -35,6 +38,12 @@ export class ContextManager extends EventEmitter {
 
   /** Cached context by project path */
   private cachedContext: ContextByProject = {};
+
+  /** Per-window usage tracking (windowId → ContextUsage) */
+  private perWindowUsage: Map<string, ContextUsage> = new Map();
+
+  /** Last warning threshold emitted per window (prevents duplicate warnings) */
+  private lastWarningThreshold: Map<string, number> = new Map();
 
   /** Database reference for window lookups */
   private db: Database.Database | null = null;
@@ -73,21 +82,22 @@ export class ContextManager extends EventEmitter {
 
   /**
    * Extract project name from a working directory path.
-   * Returns the directory name for paths under /home/hercules/, null otherwise.
+   * Returns the directory name for paths under $HOME, null otherwise.
    */
   private extractProjectName(cwd: string | null): string | null {
     if (!cwd) return null;
 
+    const userHome = process.env.HOME || '/home/hercules';
     // Normalize home directory shorthand
-    const normalizedPath = cwd.replace(/^~/, '/home/hercules');
+    const normalizedPath = cwd.replace(/^~/, userHome);
 
-    // Only extract project name from paths under /home/hercules/
-    if (!normalizedPath.startsWith('/home/hercules/')) {
+    // Only extract project name from paths under $HOME/
+    if (!normalizedPath.startsWith(userHome + '/')) {
       return null;
     }
 
-    // Remove /home/hercules/ prefix
-    const relativePath = normalizedPath.substring('/home/hercules/'.length);
+    // Remove $HOME/ prefix
+    const relativePath = normalizedPath.substring(userHome.length + 1);
 
     // Extract the first directory component (project name)
     const parts = relativePath.split('/').filter(Boolean);
@@ -183,7 +193,37 @@ export class ContextManager extends EventEmitter {
     // Broadcast to all subscribed windows watching this project
     for (const subscription of this.subscriptions.values()) {
       if (subscription.projectPath === projectPath) {
+        // Update per-window usage cache
+        this.perWindowUsage.set(subscription.windowId, usage);
+
         this.sendContextUpdate(subscription.ws, subscription.windowId, usage);
+
+        // Check warning thresholds and emit toast notifications
+        this.checkWarningThresholds(subscription, usage);
+      }
+    }
+  }
+
+  /**
+   * Check if usage has crossed a warning threshold and emit a warning message.
+   * Only emits once per threshold per window (resets when usage drops below threshold).
+   */
+  private checkWarningThresholds(subscription: WindowSubscription, usage: ContextUsage): void {
+    const lastThreshold = this.lastWarningThreshold.get(subscription.windowId) || 0;
+
+    // If usage dropped below last warning threshold, reset tracking
+    if (usage.percentage < lastThreshold) {
+      this.lastWarningThreshold.set(subscription.windowId, 0);
+      return;
+    }
+
+    // Check thresholds in descending order to emit the highest crossed threshold
+    for (let i = CONTEXT_WARNING_THRESHOLDS.length - 1; i >= 0; i--) {
+      const threshold = CONTEXT_WARNING_THRESHOLDS[i];
+      if (usage.percentage >= threshold && lastThreshold < threshold) {
+        this.lastWarningThreshold.set(subscription.windowId, threshold);
+        this.sendContextWarning(subscription.ws, subscription.windowId, usage, threshold);
+        break; // Only send the highest new threshold
       }
     }
   }
@@ -222,6 +262,12 @@ export class ContextManager extends EventEmitter {
         hasUsage: !!cachedUsage,
         percentage: cachedUsage?.percentage,
       });
+
+      // Initialize per-window usage from cache
+      if (cachedUsage) {
+        this.perWindowUsage.set(windowId, cachedUsage);
+      }
+
       this.sendContextSync(ws, windowId, cachedUsage);
     } else {
       logger.warn(`ContextManager: No project path for window ${windowId}, sending null usage`);
@@ -262,6 +308,8 @@ export class ContextManager extends EventEmitter {
   unsubscribe(windowId: string): void {
     const wasSubscribed = this.subscriptions.delete(windowId);
     if (wasSubscribed) {
+      this.perWindowUsage.delete(windowId);
+      this.lastWarningThreshold.delete(windowId);
       logger.debug(`ContextManager: Unsubscribed window ${windowId}`);
     }
   }
@@ -305,6 +353,35 @@ export class ContextManager extends EventEmitter {
   }
 
   /**
+   * Send context warning message to a WebSocket (toast notification trigger)
+   */
+  private sendContextWarning(ws: WebSocket, windowId: string, usage: ContextUsage, threshold: ContextWarningLevel): void {
+    const messages: Record<number, string> = {
+      90: `Context window at ${usage.percentage.toFixed(0)}% — consider starting a new session soon`,
+      95: `Context window at ${usage.percentage.toFixed(0)}% — running low on context`,
+      98: `Context window at ${usage.percentage.toFixed(0)}% — nearly full, start a new session`,
+    };
+
+    const message: ContextWarningMessage = {
+      type: 'context:warning',
+      windowId,
+      usage,
+      threshold,
+      message: messages[threshold] || `Context usage at ${threshold}%`,
+    };
+
+    logger.warn(`ContextManager: Warning for window ${windowId}: ${threshold}% threshold crossed (${usage.percentage.toFixed(1)}%)`);
+    this.sendToWebSocket(ws, JSON.stringify(message));
+  }
+
+  /**
+   * Get the current usage for a specific window
+   */
+  getUsageForWindow(windowId: string): ContextUsage | null {
+    return this.perWindowUsage.get(windowId) || null;
+  }
+
+  /**
    * Send a message to a WebSocket connection.
    */
   private sendToWebSocket(ws: WebSocket, message: string): void {
@@ -323,10 +400,12 @@ export class ContextManager extends EventEmitter {
   getStats(): {
     subscriptionCount: number;
     projectsTracked: number;
+    windowsTracked: number;
   } {
     return {
       subscriptionCount: this.subscriptions.size,
       projectsTracked: Object.keys(this.cachedContext).length,
+      windowsTracked: this.perWindowUsage.size,
     };
   }
 }

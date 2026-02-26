@@ -18,7 +18,12 @@ export type AuditEvent =
   | 'automation.fail'
   | 'rate_limit.exceeded'
   | 'token.created'
-  | 'token.expired';
+  | 'token.expired'
+  // Z.3.9.1: Claude L2 execution events
+  | 'claude.execute'
+  | 'claude.complete'
+  | 'claude.fail'
+  | 'claude.cancel';
 
 export interface AuditContext {
   sessionId?: string;
@@ -183,6 +188,73 @@ export class AuditLogger {
     this.info('token.expired', {
       ...context,
       sessionId: context.sessionId,
+    });
+  }
+
+  // Z.3.9.1: Claude L2 execution audit methods
+  logClaudeExecute(context: AuditContext & {
+    promptHash: string;
+    promptPreview: string;
+    workingDir: string;
+    executionId: string;
+  }): void {
+    this.info('claude.execute', {
+      ...context,
+      details: {
+        ...context.details,
+        prompt_hash: context.promptHash,
+        prompt_preview: context.promptPreview,
+        working_dir: context.workingDir,
+        execution_id: context.executionId,
+      },
+    });
+  }
+
+  logClaudeComplete(context: AuditContext & {
+    executionId: string;
+    durationMs: number;
+    exitCode?: number;
+    filesChanged?: string[];
+  }): void {
+    this.info('claude.complete', {
+      ...context,
+      details: {
+        ...context.details,
+        execution_id: context.executionId,
+        duration_ms: context.durationMs,
+        exit_code: context.exitCode,
+        files_changed: context.filesChanged,
+      },
+    });
+  }
+
+  logClaudeFail(context: AuditContext & {
+    executionId: string;
+    error: string;
+    durationMs: number;
+  }): void {
+    this.error('claude.fail', {
+      ...context,
+      details: {
+        ...context.details,
+        execution_id: context.executionId,
+        error: context.error,
+        duration_ms: context.durationMs,
+      },
+    });
+  }
+
+  logClaudeCancel(context: AuditContext & {
+    executionId: string;
+    reason: string;
+  }): void {
+    this.warn('claude.cancel', {
+      ...context,
+      details: {
+        ...context.details,
+        execution_id: context.executionId,
+        reason: context.reason,
+      },
     });
   }
 

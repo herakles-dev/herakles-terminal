@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { apiUrl } from '../../services/api';
 import { extractVideoId } from '../../../shared/musicProtocol.js';
 
 interface SearchResult {
@@ -28,7 +29,7 @@ export const MusicPlayerSearch: React.FC<MusicPlayerSearchProps> = ({
 
   // Fetch CSRF token on mount
   useEffect(() => {
-    fetch('/api/csrf-token', { credentials: 'include' })
+    fetch(apiUrl('/csrf-token'), { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         csrfTokenRef.current = data.data?.token || null;
@@ -79,7 +80,7 @@ export const MusicPlayerSearch: React.FC<MusicPlayerSearchProps> = ({
         headers['x-csrf-token'] = csrfTokenRef.current;
       }
 
-      const response = await fetch('/api/music/search', {
+      const response = await fetch(apiUrl('/music/search'), {
         method: 'POST',
         headers,
         credentials: 'include',

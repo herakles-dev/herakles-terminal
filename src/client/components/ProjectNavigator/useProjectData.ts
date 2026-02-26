@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { apiUrl } from '../../services/api';
 
 export interface ProjectInfo {
   id: string;
@@ -61,7 +62,7 @@ export function useProjectData() {
     setError(null);
     
     try {
-      const response = await fetch('/api/projects');
+      const response = await fetch(apiUrl('/projects'));
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -82,7 +83,7 @@ export function useProjectData() {
 
   const fetchCategories = useCallback(async () => {
     try {
-      const response = await fetch('/api/projects/categories');
+      const response = await fetch(apiUrl('/projects/categories'));
       if (response.ok) {
         const json = await response.json();
         setCategories(json.data?.categories || []);

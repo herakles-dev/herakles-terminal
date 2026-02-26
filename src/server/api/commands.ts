@@ -68,7 +68,7 @@ export function commandRoutes(store: SessionStore): Router {
 
     const prefix = req.query.prefix as string || '';
     const limit = Math.min(parseInt(req.query.limit as string) || 15, 50);
-    const workingDir = req.query.workingDir as string || '/home/hercules';
+    const workingDir = req.query.workingDir as string || process.env.HOME || '/home/hercules';
     const includeTemplates = req.query.includeTemplates !== 'false';
     const includeHistory = req.query.includeHistory !== 'false';
 

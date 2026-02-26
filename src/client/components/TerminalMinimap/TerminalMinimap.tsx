@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import type { Terminal, IBufferLine } from '@xterm/xterm';
+import { apiUrl } from '../../services/api';
 
 interface TimeMarker {
   line: number;
@@ -249,7 +250,7 @@ function classifyBuffer(
   const win = window as unknown as { _minimapDebugSent?: boolean };
   if (!win._minimapDebugSent && debugLines.length > 0) {
     win._minimapDebugSent = true;
-    fetch('/api/debug/minimap', {
+    fetch(apiUrl('/debug/minimap'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lines: debugLines, classifications: debugClassifications })

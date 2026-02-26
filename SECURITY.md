@@ -165,10 +165,10 @@ IP_WHITELIST_ENABLED=false
    pkill -f "tsx.*herakles"
    
    # Check active sessions
-   sqlite3 data/herakles.db "SELECT * FROM sessions WHERE active = 1;"
+   sqlite3 data/zeus.db "SELECT * FROM sessions WHERE active = 1;"
    
    # Review audit logs
-   sqlite3 data/herakles.db "SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100;"
+   sqlite3 data/zeus.db "SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100;"
    ```
 
 2. **Investigation:**
@@ -188,13 +188,13 @@ IP_WHITELIST_ENABLED=false
 
 ```bash
 # Unusual command patterns
-sqlite3 data/herakles.db "SELECT * FROM audit_logs WHERE command LIKE '%sudo%' OR command LIKE '%rm -rf%';"
+sqlite3 data/zeus.db "SELECT * FROM audit_logs WHERE command LIKE '%sudo%' OR command LIKE '%rm -rf%';"
 
 # Multiple failed auth attempts
 grep "Rejected:" /var/log/herakles/app.log | tail -20
 
 # Session from unexpected IP
-sqlite3 data/herakles.db "SELECT * FROM sessions WHERE client_ip NOT IN ('YOUR.EXPECTED.IP');"
+sqlite3 data/zeus.db "SELECT * FROM sessions WHERE client_ip NOT IN ('YOUR.EXPECTED.IP');"
 ```
 
 ---

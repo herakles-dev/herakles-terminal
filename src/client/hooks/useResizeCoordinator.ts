@@ -43,12 +43,13 @@ interface AnimationState {
 
 const MIN_COLS = RESIZE_CONSTANTS.minCols;
 const MIN_ROWS = RESIZE_CONSTANTS.minRows;
-const COALESCE_DEBOUNCE_MS = 100;
+const COALESCE_DEBOUNCE_MS = 150;
 const RESIZE_TIMEOUT_MS = 3000;
-const CANVAS_DIMENSION_TOLERANCE = 2;
+const CANVAS_DIMENSION_TOLERANCE = 4; // RC-3 fix: relaxed from 2 to reduce false mismatches
 const TRANSITION_WAIT_TIMEOUT_MS = 300;
-const CANVAS_VERIFY_MAX_RETRIES = 5; // Increased for better reliability
-const CANVAS_VERIFY_DELAYS = [16, 32, 64, 100, 150]; // Extended delays
+const CANVAS_VERIFY_MAX_RETRIES = 3; // Increased from 2 to give canvas one more sync chance post-resize
+const CANVAS_VERIFY_DELAYS = [16, 48, 100]; // Final 100ms delay for slow layout propagation
+const RESIZE_OBSERVER_FALLBACK_MS = 150; // Fallback if ResizeObserver doesn't fire
 
 /**
  * Verify WebGL canvas dimensions with retry and exponential backoff.
@@ -68,8 +69,11 @@ async function verifyWebGLCanvasSyncWithRetry(
 
     if (isRecovering?.()) return true; // Abort if recovery started
 
-    const delay = CANVAS_VERIFY_DELAYS[attempt] ?? 64;
-    await new Promise(resolve => setTimeout(resolve, delay));
+    // RC-3 fix: Wait using RAF + small delay to sync with browser paint cycle
+    const delay = CANVAS_VERIFY_DELAYS[attempt] ?? 48;
+    await new Promise<void>(resolve => {
+      requestAnimationFrame(() => setTimeout(resolve, delay));
+    });
 
     if (isRecovering?.()) return true;
 
@@ -248,12 +252,32 @@ export function useResizeCoordinator() {
       }
     }
 
-    // No transitions or immediate mode: use double-RAF for CSS paint
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        executeResize();
+    // No transitions or immediate mode: use ResizeObserver to wait for final layout
+    if (!immediate && termElement) {
+      let fired = false;
+      const observer = new ResizeObserver(() => {
+        if (fired) return;
+        fired = true;
+        observer.disconnect();
+        clearTimeout(fallbackTimer);
+        requestAnimationFrame(() => executeResize());
       });
-    });
+      observer.observe(termElement);
+      // Fallback timeout in case element size didn't change (ResizeObserver won't fire)
+      const fallbackTimer = setTimeout(() => {
+        if (fired) return;
+        fired = true;
+        observer.disconnect();
+        requestAnimationFrame(() => executeResize());
+      }, RESIZE_OBSERVER_FALLBACK_MS);
+    } else {
+      // Immediate mode: use double-RAF for CSS paint
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          executeResize();
+        });
+      });
+    }
   }, []);
 
   const register = useCallback((target: ResizeTarget, options?: RegisterOptions) => {
@@ -305,8 +329,8 @@ export function useResizeCoordinator() {
         for (const target of targets) {
           performAtomicResize(target, immediate);
         }
-        // Release lock after current microtask queue drains (same frame, after all sync resize work)
-        Promise.resolve().then(() => {
+        // Release lock after next frame to prevent concurrent resize cascades
+        requestAnimationFrame(() => {
           isResizingRef.current = false;
         });
       });

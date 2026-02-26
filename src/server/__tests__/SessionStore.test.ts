@@ -147,6 +147,7 @@ describe('SessionStore', () => {
       const window = store.createWindow({
         id: 'test-window-1',
         session_id: 'window-test-session',
+        type: 'terminal',
         name: 'Main',
         auto_name: null,
         position_x: 0,
@@ -165,6 +166,7 @@ describe('SessionStore', () => {
       store.createWindow({
         id: 'window-1',
         session_id: 'window-test-session',
+        type: 'terminal',
         name: 'Main',
         auto_name: null,
         position_x: 0,
@@ -178,6 +180,7 @@ describe('SessionStore', () => {
       store.createWindow({
         id: 'window-2',
         session_id: 'window-test-session',
+        type: 'terminal',
         name: 'Secondary',
         auto_name: null,
         position_x: 0.5,
@@ -196,6 +199,7 @@ describe('SessionStore', () => {
       store.createWindow({
         id: 'layout-test',
         session_id: 'window-test-session',
+        type: 'terminal',
         name: 'Layout Test',
         auto_name: null,
         position_x: 0,

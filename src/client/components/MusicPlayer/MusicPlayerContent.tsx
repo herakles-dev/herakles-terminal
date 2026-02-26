@@ -85,6 +85,8 @@ interface MusicPlayerContentProps {
   onToggleFullscreen: () => void;
   // Resize props
   onResizeStart: (e: React.MouseEvent, direction: string) => void;
+  // Dock to window prop
+  onDockToWindow?: () => void;
 }
 
 let ytApiLoaded = false;
@@ -148,6 +150,7 @@ export const MusicPlayerContent: React.FC<MusicPlayerContentProps> = ({
   isFullscreen,
   onToggleFullscreen,
   onResizeStart,
+  onDockToWindow,
 }) => {
   const playerRef = useRef<YTPlayer | null>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -345,6 +348,18 @@ export const MusicPlayerContent: React.FC<MusicPlayerContentProps> = ({
                 </svg>
               )}
             </button>
+            {onDockToWindow && (
+              <button
+                className="music-player-action-btn"
+                onClick={onDockToWindow}
+                title="Dock to Window"
+                aria-label="Dock to Window"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                  <path d="M4 4h16v16H4V4zm2 2v12h12V6H6z"/>
+                </svg>
+              </button>
+            )}
             <button
               className="music-player-action-btn"
               onClick={onMinimize}

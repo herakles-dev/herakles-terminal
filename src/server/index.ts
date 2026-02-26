@@ -20,6 +20,7 @@ import { uploadRoutes } from './api/uploads.js';
 import { projectRoutes } from './api/projects.js';
 import { createMusicRoutes } from './music/musicRoutes.js';
 import { MusicPlayerStore } from './music/MusicPlayerStore.js';
+import { MusicManager } from './music/MusicManager.js';
 import { securityHeaders, corsMiddleware } from './middleware/security.js';
 import { autheliaAuth } from './middleware/autheliaAuth.js';
 import { httpRateLimiter, handoffLimiter } from './middleware/rateLimit.js';
@@ -28,6 +29,7 @@ import { ipWhitelistMiddleware } from './middleware/ipWhitelist.js';
 import { logger, httpLogger, wsLogger } from './utils/logger.js';
 import { cleanupOldUploads } from './utils/cleanup.js';
 import { artifactWatcher } from './canvas/ArtifactWatcher.js';
+import { ArtifactManager } from './canvas/ArtifactManager.js';
 import './todo/TodoManager.js'; // Side-effect: initializes singleton and sets up event listeners
 import { todoFileWatcher } from './todo/TodoFileWatcher.js';
 import { contextManager } from './context/ContextManager.js';
@@ -42,6 +44,7 @@ const server = createServer(app);
 
 const store = new SessionStore(config.database.path);
 const musicStore = new MusicPlayerStore(store.getDatabase());
+const musicManager = new MusicManager(musicStore);
 const tmux = new TmuxManager(config.tmux.socket, config.tmux.configPath);
 const windowManager = new WindowManager(tmux, store);
 const deviceManager = new MultiDeviceManager(store);
@@ -54,6 +57,7 @@ const connectionManager = new ConnectionManager(
   automationEngine,
   auditLogger
 );
+connectionManager.setMusicManager(musicManager);
 
 app.use(express.json());
 app.use(ipWhitelistMiddleware); // SECURITY: IP whitelist (if enabled)
@@ -223,12 +227,19 @@ server.listen(config.port, host, () => {
   });
 });
 
+const artifactManager = new ArtifactManager();
+connectionManager.setArtifactManager(artifactManager);
+
 artifactWatcher.on('artifact', (artifact) => {
   connectionManager.broadcastToAll({
     type: 'canvas:artifact',
     artifact,
   } as any);
-  
+
+  // Track in artifact history (in-memory, last 50)
+  artifactManager.recordArtifact(artifact);
+  artifactManager.broadcastHistory();
+
   const connectedUsers = connectionManager.getConnectedUserEmails();
   for (const email of connectedUsers) {
     store.saveTempArtifact({

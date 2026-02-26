@@ -1,12 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Artifact, CanvasState } from '../types/canvas';
+import { apiUrl } from '../services/api';
 
 const MAX_ARTIFACTS = 50;
 const MAX_CONTENT_SIZE = 100 * 1024;
 
 async function getCsrfToken(): Promise<string | null> {
   try {
-    const response = await fetch('/api/csrf-token', { credentials: 'include' });
+    const response = await fetch(apiUrl('/csrf-token'), { credentials: 'include' });
     if (!response.ok) return null;
     const data = await response.json();
     return data.data?.token || null;
@@ -17,7 +18,7 @@ async function getCsrfToken(): Promise<string | null> {
 
 async function fetchStarredArtifacts(): Promise<Artifact[]> {
   try {
-    const response = await fetch('/api/artifacts/starred', {
+    const response = await fetch(apiUrl('/artifacts/starred'), {
       credentials: 'include',
     });
     if (!response.ok) return [];
@@ -30,7 +31,7 @@ async function fetchStarredArtifacts(): Promise<Artifact[]> {
 
 async function fetchTempArtifacts(): Promise<Artifact[]> {
   try {
-    const response = await fetch('/api/artifacts/temp', {
+    const response = await fetch(apiUrl('/artifacts/temp'), {
       credentials: 'include',
     });
     if (!response.ok) return [];
@@ -46,7 +47,7 @@ async function starArtifactApi(artifact: Artifact, csrfToken: string | null): Pr
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (csrfToken) headers['x-csrf-token'] = csrfToken;
     
-    const response = await fetch('/api/artifacts/starred', {
+    const response = await fetch(apiUrl('/artifacts/starred'), {
       method: 'POST',
       headers,
       credentials: 'include',
@@ -70,7 +71,7 @@ async function unstarArtifactApi(id: string, csrfToken: string | null): Promise<
     const headers: Record<string, string> = {};
     if (csrfToken) headers['x-csrf-token'] = csrfToken;
     
-    const response = await fetch(`/api/artifacts/starred/${id}`, {
+    const response = await fetch(apiUrl(`/artifacts/starred/${id}`), {
       method: 'DELETE',
       headers,
       credentials: 'include',

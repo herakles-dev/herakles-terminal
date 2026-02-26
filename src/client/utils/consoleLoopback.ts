@@ -3,6 +3,8 @@
  * Enables server-side visibility into client-side debugging
  */
 
+import { apiUrl } from '../services/api';
+
 type LogLevel = 'log' | 'info' | 'warn' | 'error' | 'debug';
 
 interface LogEntry {
@@ -13,7 +15,7 @@ interface LogEntry {
   timestamp: string;
 }
 
-const LOG_ENDPOINT = '/api/debug/console';
+const LOG_ENDPOINT = apiUrl('/debug/console');
 const LOG_QUEUE: LogEntry[] = [];
 let flushTimer: NodeJS.Timeout | null = null;
 let isEnabled = false;

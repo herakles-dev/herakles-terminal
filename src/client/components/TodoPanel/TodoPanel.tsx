@@ -1,12 +1,18 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import type { SessionTodos } from '../../../shared/todoProtocol';
 import { TodoSection } from './TodoSection';
+
+const MIN_WIDTH = 200;
+const MAX_WIDTH = 400;
+const DEFAULT_WIDTH = 280;
+const COLLAPSED_WIDTH = 48;
 
 interface TodoPanelProps {
   expanded: boolean;
   onToggle: () => void;
   sessions: SessionTodos[];
   isLoading?: boolean;
+  onWidthChange?: (width: number) => void;
 }
 
 function TodoPanelComponent({
@@ -14,7 +20,47 @@ function TodoPanelComponent({
   onToggle,
   sessions,
   isLoading = false,
+  onWidthChange,
 }: TodoPanelProps) {
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const [isDragging, setIsDragging] = useState(false);
+  const [hoveredSession, setHoveredSession] = useState<string | null>(null);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(DEFAULT_WIDTH);
+
+  // Resize drag handling
+  const handleDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setIsDragging(true);
+      dragStartXRef.current = e.clientX;
+      dragStartWidthRef.current = panelWidth;
+    },
+    [panelWidth]
+  );
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - dragStartXRef.current;
+      const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, dragStartWidthRef.current + delta));
+      setPanelWidth(newWidth);
+      onWidthChange?.(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, onWidthChange]);
+
   // Get total counts across all sessions
   const { totalPending, totalInProgress } = useMemo(() => {
     let pending = 0;
@@ -30,21 +76,51 @@ function TodoPanelComponent({
     return { totalPending: pending, totalInProgress: inProgress };
   }, [sessions]);
 
-  // Check if any session has todos
+  // Per-session stats for collapsed progress bars
+  const sessionStats = useMemo(() => {
+    return sessions.map((session) => {
+      let pending = 0;
+      let inProgress = 0;
+      let completed = 0;
+      for (const todo of session.todos) {
+        if (todo.status === 'pending') pending++;
+        else if (todo.status === 'in_progress') inProgress++;
+        else if (todo.status === 'completed') completed++;
+      }
+      const total = pending + inProgress + completed;
+      return {
+        sessionId: session.sessionId,
+        sessionName: session.sessionName,
+        pending,
+        inProgress,
+        completed,
+        total,
+        completedPct: total > 0 ? completed / total : 0,
+        inProgressPct: total > 0 ? inProgress / total : 0,
+        pendingPct: total > 0 ? pending / total : 0,
+      };
+    });
+  }, [sessions]);
+
   const hasTodos = sessions.length > 0;
   const totalNotCompleted = totalPending + totalInProgress;
+  const currentWidth = expanded ? panelWidth : COLLAPSED_WIDTH;
+
+  const handleSessionHover = useCallback((id: string | null) => {
+    setHoveredSession(id);
+  }, []);
 
   return (
     <div
-      className="
+      className={`
         h-full flex flex-col
         border-r border-white/[0.06]
-        transition-[width] duration-200 ease-out
-        overflow-hidden
-      "
+        overflow-hidden relative
+        ${isDragging ? 'select-none' : 'transition-[width,min-width] duration-200 ease-out'}
+      `}
       style={{
-        width: expanded ? '280px' : '48px',
-        minWidth: expanded ? '280px' : '48px',
+        width: `${currentWidth}px`,
+        minWidth: `${currentWidth}px`,
         background: 'rgba(10, 10, 15, 0.85)',
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
@@ -149,7 +225,7 @@ function TodoPanelComponent({
         )}
       </div>
 
-      {/* Content */}
+      {/* Expanded content */}
       {expanded && (
         <div className="flex-1 overflow-hidden flex flex-col">
           {isLoading ? (
@@ -201,7 +277,7 @@ function TodoPanelComponent({
                   sessionId={session.sessionId}
                   sessionName={session.sessionName}
                   todos={session.todos}
-                  isActive={index === 0} // Most recent session is "active"
+                  isActive={index === 0}
                   defaultExpanded={index === 0}
                 />
               ))}
@@ -210,21 +286,102 @@ function TodoPanelComponent({
         </div>
       )}
 
-      {/* Collapsed state indicator */}
+      {/* Collapsed state - vertical progress bars per session */}
       {!expanded && hasTodos && (
-        <div className="flex-1 flex flex-col items-center pt-3 gap-1">
-          {totalInProgress > 0 && (
-            <div className="w-2 h-2 rounded-full bg-[#00d4ff] shadow-[0_0_6px_rgba(0,212,255,0.5)] animate-pulse" />
-          )}
-          {totalPending > 0 && (
+        <div className="flex-1 flex flex-col items-center pt-3 gap-2.5 px-1.5">
+          {sessionStats.map((stat) => (
             <div
-              className="w-1.5 h-1.5 rounded-full bg-[#71717a]"
-              style={{
-                opacity: Math.min(1, 0.3 + totalPending * 0.15),
-              }}
-            />
-          )}
+              key={stat.sessionId}
+              className="relative group"
+              onMouseEnter={() => handleSessionHover(stat.sessionId)}
+              onMouseLeave={() => handleSessionHover(null)}
+            >
+              {/* Vertical progress bar */}
+              <div className="w-2.5 h-14 rounded-full bg-white/[0.04] overflow-hidden flex flex-col-reverse cursor-pointer">
+                {stat.completedPct > 0 && (
+                  <div
+                    className="w-full bg-[#22c55e]/60 transition-all duration-300"
+                    style={{ height: `${stat.completedPct * 100}%` }}
+                  />
+                )}
+                {stat.inProgressPct > 0 && (
+                  <div
+                    className="w-full bg-[#00d4ff] shadow-[0_0_6px_rgba(0,212,255,0.5)] transition-all duration-300"
+                    style={{ height: `${stat.inProgressPct * 100}%` }}
+                  />
+                )}
+                {stat.pendingPct > 0 && (
+                  <div
+                    className="w-full bg-[#71717a]/40 transition-all duration-300"
+                    style={{ height: `${stat.pendingPct * 100}%` }}
+                  />
+                )}
+              </div>
+
+              {/* Tooltip on hover */}
+              {hoveredSession === stat.sessionId && (
+                <div className="absolute left-full ml-2.5 top-0 z-[9999] px-3 py-2 bg-[#0a0a0f] border border-white/[0.08] rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.6)] whitespace-nowrap pointer-events-none">
+                  <div className="text-[11px] font-medium text-[#e0e0e8] mb-1.5">
+                    {stat.sessionName}
+                  </div>
+                  <div className="flex items-center gap-3 text-[9px]">
+                    {stat.inProgress > 0 && (
+                      <span className="flex items-center gap-1 text-[#00d4ff]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#00d4ff] inline-block" />
+                        {stat.inProgress} active
+                      </span>
+                    )}
+                    {stat.pending > 0 && (
+                      <span className="flex items-center gap-1 text-[#a1a1aa]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#71717a] inline-block" />
+                        {stat.pending} pending
+                      </span>
+                    )}
+                    {stat.completed > 0 && (
+                      <span className="flex items-center gap-1 text-[#22c55e]/70">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e]/60 inline-block" />
+                        {stat.completed} done
+                      </span>
+                    )}
+                  </div>
+                  {/* Mini progress bar in tooltip */}
+                  <div className="mt-1.5 w-full h-1 rounded-full bg-white/[0.04] overflow-hidden flex">
+                    {stat.completedPct > 0 && (
+                      <div
+                        className="h-full bg-[#22c55e]/60"
+                        style={{ width: `${stat.completedPct * 100}%` }}
+                      />
+                    )}
+                    {stat.inProgressPct > 0 && (
+                      <div
+                        className="h-full bg-[#00d4ff]"
+                        style={{ width: `${stat.inProgressPct * 100}%` }}
+                      />
+                    )}
+                    {stat.pendingPct > 0 && (
+                      <div
+                        className="h-full bg-[#71717a]/40"
+                        style={{ width: `${stat.pendingPct * 100}%` }}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
+      )}
+
+      {/* Drag handle (only when expanded) */}
+      {expanded && (
+        <div
+          className={`
+            absolute top-0 right-0 w-1.5 h-full cursor-col-resize z-20
+            transition-colors duration-150
+            ${isDragging ? 'bg-[#00d4ff]/30' : 'hover:bg-[#00d4ff]/15'}
+          `}
+          onMouseDown={handleDragStart}
+        />
       )}
     </div>
   );

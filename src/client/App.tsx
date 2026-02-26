@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { apiUrl } from './services/api';
 import { enableConsoleLoopback } from './utils/consoleLoopback';
 
 // Enable console loopback for server-side debugging
@@ -24,9 +25,15 @@ import { FileDropZone } from './components/FileDropZone';
 import { UploadProgress } from './components/UploadProgress';
 import { TodoPanel } from './components/TodoPanel';
 import { MusicPlayer } from './components/MusicPlayer';
+import { MusicPlayerContent } from './components/MusicPlayer/MusicPlayerContent';
+import { ArtifactToolbarButton, FullscreenViewer } from './components/Canvas';
+import { TemplateToolbar } from './components/TemplateToolbar';
+import { WelcomePage } from './components/WelcomePage';
 import type { SessionTodos } from '@shared/todoProtocol';
-import type { MusicPlayerState } from '@shared/musicProtocol';
+import type { MusicPlayerState, MusicDockState, StarredVideo } from '@shared/musicProtocol';
+import { DEFAULT_DOCK_STATE, getYouTubeThumbnail, extractVideoId } from '@shared/musicProtocol';
 import type { ContextUsage, ContextSyncMessage, ContextUpdateMessage } from '@shared/contextProtocol';
+import type { ArtifactMetadata } from '@shared/types';
 
 import { useWebSocket, ConnectionState } from './hooks/useWebSocket';
 import { useKeyboardHeight } from './hooks/useKeyboardHeight';
@@ -37,7 +44,7 @@ import { useClipboardUpload } from './hooks/useClipboardUpload';
 import { useHealthActions } from './hooks/useHealthActions';
 import { useToast } from './components/Toast/Toast';
 import { uploadService } from './services/uploadService';
-import { OutputPipelineManager } from './services/OutputPipelineManager';
+import { OutputPipelineManager, filterThinkingOutput } from './services/OutputPipelineManager';
 import { WebGLHealthMonitor, exposeMetricsToWindow } from './services/WebGLHealthMonitor';
 
 import { ResizeCoordinatorContext } from './contexts/ResizeCoordinatorContext';
@@ -48,6 +55,7 @@ import { TERMINAL_DEFAULTS } from '@shared/constants';
 interface WindowConfig {
   id: string;
   name: string;
+  type: 'terminal' | 'media';
   x: number;
   y: number;
   width: number;
@@ -59,33 +67,34 @@ interface WindowConfig {
 
 type WindowLayout = { x: number; y: number; width: number; height: number };
 
-function calculateWindowLayouts(windowCount: number): WindowLayout[] {
+// Helper: Calculate grid layouts for terminal windows only (existing logic)
+function calculateTerminalGridLayouts(count: number): WindowLayout[] {
   const MAIN_WIDTH = 0.30;
   const RIGHT_START = 0.30;
   const RIGHT_WIDTH = 0.70;
   const HALF_RIGHT = RIGHT_WIDTH / 2;
-  
+
   const layouts: WindowLayout[][] = [
     [{ x: 0, y: 0, width: 1, height: 1 }],
-    
+
     [
       { x: 0, y: 0, width: MAIN_WIDTH, height: 1 },
       { x: RIGHT_START, y: 0, width: RIGHT_WIDTH, height: 1 },
     ],
-    
+
     [
       { x: 0, y: 0, width: MAIN_WIDTH, height: 1 },
       { x: RIGHT_START, y: 0, width: RIGHT_WIDTH, height: 0.5 },
       { x: RIGHT_START, y: 0.5, width: RIGHT_WIDTH, height: 0.5 },
     ],
-    
+
     [
       { x: 0, y: 0, width: MAIN_WIDTH, height: 1 },
       { x: RIGHT_START, y: 0, width: RIGHT_WIDTH, height: 0.5 },
       { x: RIGHT_START, y: 0.5, width: HALF_RIGHT, height: 0.5 },
       { x: RIGHT_START + HALF_RIGHT, y: 0.5, width: HALF_RIGHT, height: 0.5 },
     ],
-    
+
     [
       { x: 0, y: 0, width: MAIN_WIDTH, height: 1 },
       { x: RIGHT_START, y: 0, width: HALF_RIGHT, height: 0.5 },
@@ -93,7 +102,7 @@ function calculateWindowLayouts(windowCount: number): WindowLayout[] {
       { x: RIGHT_START, y: 0.5, width: HALF_RIGHT, height: 0.5 },
       { x: RIGHT_START + HALF_RIGHT, y: 0.5, width: HALF_RIGHT, height: 0.5 },
     ],
-    
+
     [
       { x: 0, y: 0, width: MAIN_WIDTH, height: 1 },
       { x: RIGHT_START, y: 0, width: RIGHT_WIDTH, height: 0.333 },
@@ -103,78 +112,49 @@ function calculateWindowLayouts(windowCount: number): WindowLayout[] {
       { x: RIGHT_START + HALF_RIGHT, y: 0.666, width: HALF_RIGHT, height: 0.334 },
     ],
   ];
-  
-  const idx = Math.min(windowCount, layouts.length) - 1;
+
+  const idx = Math.min(count, layouts.length) - 1;
   return idx >= 0 ? layouts[idx] : layouts[0];
 }
 
-function WelcomeScreen({ onStart }: { onStart: () => void }) {
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-[#050510] to-black flex items-center justify-center p-4 sm:p-8 relative overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(0,212,255,0.08)_0%,transparent_50%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_right,rgba(139,92,246,0.06)_0%,transparent_50%)]" />
-      
-      <div className="max-w-2xl w-full relative z-10">
-        <div className="text-center mb-10 sm:mb-14">
-          <div className="inline-block mb-6 sm:mb-8">
-            <div className="relative w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-gradient-to-br from-[#111118] to-[#0c0c14] border border-white/[0.08] flex items-center justify-center shadow-[0_0_60px_rgba(0,212,255,0.15),0_20px_40px_rgba(0,0,0,0.4)] group">
-              <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[#00d4ff]/10 to-[#8b5cf6]/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-              <svg className="w-10 h-10 sm:w-12 sm:h-12 text-[#00d4ff] drop-shadow-[0_0_12px_rgba(0,212,255,0.5)] relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
-          </div>
-          <h1 className="text-4xl sm:text-6xl font-bold text-white mb-3 sm:mb-4 tracking-tight">
-            <span className="bg-gradient-to-r from-white via-white to-[#a1a1aa] bg-clip-text text-transparent">Zeus Terminal</span>
-          </h1>
-          <p className="text-lg sm:text-xl text-[#a1a1aa]">Claude Code CLI with orchestration superpowers</p>
-        </div>
+// Main layout calculator: handles mixed terminal + media windows
+function calculateWindowLayouts(windows: Array<{ type?: 'terminal' | 'media' }>): WindowLayout[] {
+  // Separate windows by type
+  const terminalIndices: number[] = [];
+  const mediaIndices: number[] = [];
 
-        <div className="relative bg-gradient-to-b from-[#0c0c14]/80 to-[#07070c]/80 backdrop-blur-xl rounded-2xl p-6 sm:p-8 border border-white/[0.06] mb-8 sm:mb-10 shadow-[0_20px_60px_rgba(0,0,0,0.4)]">
-          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/30 to-transparent" />
-          <h2 className="text-base sm:text-lg font-semibold text-[#00d4ff] mb-4 sm:mb-5 flex items-center gap-3">
-            <span className="relative w-2.5 h-2.5 bg-[#00d4ff] rounded-full shadow-[0_0_12px_rgba(0,212,255,0.6)]">
-              <span className="absolute inset-0 bg-[#00d4ff] rounded-full animate-ping opacity-50" />
-            </span>
-            Multi-Window Terminal
-          </h2>
-          <div className="space-y-3 sm:space-y-4 text-base sm:text-lg text-[#d4d4d8]">
-            <div className="flex items-center gap-4 group">
-              <span className="w-6 h-6 rounded-full bg-[#22c55e]/15 flex items-center justify-center text-[#4ade80] text-xs font-bold shadow-[0_0_8px_rgba(34,197,94,0.2)]">✓</span>
-              <span className="group-hover:text-white transition-colors">Up to 6 flexible tile windows per session</span>
-            </div>
-            <div className="flex items-center gap-4 group">
-              <span className="w-6 h-6 rounded-full bg-[#22c55e]/15 flex items-center justify-center text-[#4ade80] text-xs font-bold shadow-[0_0_8px_rgba(34,197,94,0.2)]">✓</span>
-              <span className="group-hover:text-white transition-colors">Drag, resize, minimize windows</span>
-            </div>
-            <div className="flex items-center gap-4 group">
-              <span className="w-6 h-6 rounded-full bg-[#22c55e]/15 flex items-center justify-center text-[#4ade80] text-xs font-bold shadow-[0_0_8px_rgba(34,197,94,0.2)]">✓</span>
-              <span className="group-hover:text-white transition-colors">Command templates and automations</span>
-            </div>
-            <div className="flex items-center gap-4 group">
-              <span className="w-6 h-6 rounded-full bg-[#22c55e]/15 flex items-center justify-center text-[#4ade80] text-xs font-bold shadow-[0_0_8px_rgba(34,197,94,0.2)]">✓</span>
-              <span className="group-hover:text-white transition-colors">Persistent tmux sessions</span>
-            </div>
-          </div>
-        </div>
+  windows.forEach((w, i) => {
+    if (w.type === 'media') {
+      mediaIndices.push(i);
+    } else {
+      terminalIndices.push(i);
+    }
+  });
 
-        <button
-          onClick={onStart}
-          className="relative w-full py-4 sm:py-5 px-6 sm:px-8 bg-gradient-to-r from-[#0c0c14] to-[#111118] text-[#00d4ff] font-semibold rounded-xl border border-[#00d4ff]/25 hover:border-[#00d4ff]/50 shadow-[0_8px_32px_rgba(0,0,0,0.3)] hover:shadow-[0_8px_40px_rgba(0,212,255,0.15)] transition-all duration-300 active:scale-[0.98] text-lg sm:text-xl group overflow-hidden"
-        >
-          <div className="absolute inset-0 bg-gradient-to-r from-[#00d4ff]/0 via-[#00d4ff]/10 to-[#8b5cf6]/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-          <span className="relative z-10 flex items-center justify-center gap-2">
-            Enter Terminal
-            <svg className="w-5 h-5 transition-transform duration-300 group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-            </svg>
-          </span>
-        </button>
+  // Calculate layouts for each type
+  const terminalLayouts = calculateTerminalGridLayouts(terminalIndices.length);
+  const mediaLayouts = mediaIndices.map((_, i) => ({
+    x: 0.65,  // Right side, doesn't overlap terminal grid
+    y: 0.55 + (i * 0.05),  // Stack vertically if multiple
+    width: 0.33,
+    height: 0.40,
+  }));
 
-        <p className="text-center text-[#71717a] text-xs sm:text-sm mt-6 sm:mt-8 font-medium tracking-wide">terminal.herakles.dev</p>
-      </div>
-    </div>
-  );
+  // Merge layouts: assign to original window positions
+  const allLayouts: WindowLayout[] = new Array(windows.length);
+
+  let termIdx = 0;
+  let mediaIdx = 0;
+
+  for (let i = 0; i < windows.length; i++) {
+    if (windows[i].type === 'media') {
+      allLayouts[i] = mediaLayouts[mediaIdx++];
+    } else {
+      allLayouts[i] = terminalLayouts[termIdx++];
+    }
+  }
+
+  return allLayouts;
 }
 
 export default function App() {
@@ -230,7 +210,17 @@ export default function App() {
   }, [todoSessions]);
   const [musicPlayerVisible, setMusicPlayerVisible] = useState(false);
   const [musicPlayerState, setMusicPlayerState] = useState<Partial<MusicPlayerState>>({});
+  const [musicDockState, setMusicDockState] = useState<MusicDockState>(DEFAULT_DOCK_STATE);
+  const [starredVideos, setStarredVideos] = useState<StarredVideo[]>([]);
+  const [showPlaylist, setShowPlaylist] = useState(false);
   const [contextUsage, setContextUsage] = useState<Map<string, ContextUsage>>(new Map());
+  const [todoPanelWidth, setTodoPanelWidth] = useState(280);
+  const [artifactHistory, setArtifactHistory] = useState<ArtifactMetadata[]>([]);
+  const [canvasViewerOpen, setCanvasViewerOpen] = useState(false);
+  const [activeArtifactIndex, setActiveArtifactIndex] = useState(0);
+  const [youtubeButtonPos, setYoutubeButtonPos] = useState({ x: 16, y: window.innerHeight - 80 });
+  const [isDraggingYoutubeBtn, setIsDraggingYoutubeBtn] = useState(false);
+  const youtubeDragRef = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number }>();
   const csrfTokenRef = useRef<string | null>(null);
 
   // Memoized callback to prevent infinite render loop - must NOT change reference
@@ -253,7 +243,7 @@ export default function App() {
 
   // Fetch CSRF token on mount
   useEffect(() => {
-    fetch('/api/csrf-token', { credentials: 'include' })
+    fetch(apiUrl('/csrf-token'), { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (data.data?.token) {
@@ -264,10 +254,22 @@ export default function App() {
       .catch(err => console.error('[MusicSync] Failed to fetch CSRF token:', err));
   }, []);
 
+  // Fetch starred videos on mount
+  useEffect(() => {
+    fetch(apiUrl('/music/starred'), { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.data) {
+          setStarredVideos(data.data);
+        }
+      })
+      .catch(err => console.error('Failed to fetch starred videos:', err));
+  }, []);
+
   // Fetch persisted music player state on mount (resume functionality)
   useEffect(() => {
     console.log('[MusicResume] Fetching saved state...');
-    fetch('/api/music/state', { credentials: 'include' })
+    fetch(apiUrl('/music/state'), { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         console.log('[MusicResume] Got response:', JSON.stringify(data));
@@ -310,7 +312,7 @@ export default function App() {
     }
 
     if (immediate) {
-      fetch('/api/music/state', {
+      fetch(apiUrl('/music/state'), {
         method: 'PUT',
         headers,
         credentials: 'include',
@@ -328,7 +330,7 @@ export default function App() {
         if (csrfTokenRef.current) {
           timeoutHeaders['x-csrf-token'] = csrfTokenRef.current;
         }
-        fetch('/api/music/state', {
+        fetch(apiUrl('/music/state'), {
           method: 'PUT',
           headers: timeoutHeaders,
           credentials: 'include',
@@ -352,6 +354,10 @@ export default function App() {
   const contextMenuHandlersRef = useRef<Map<string, { element: HTMLElement; handler: (e: MouseEvent) => void }>>(new Map());
   const resizeCoordinatorRef = useRef(resizeCoordinator);
   resizeCoordinatorRef.current = resizeCoordinator;
+
+  // Ref for windows array to avoid handleStateChange instability (CF-B fix)
+  const windowsRef = useRef(windows);
+  windowsRef.current = windows;
 
   const getActiveTerminal = useCallback(() => {
     if (!activeWindowId) return null;
@@ -418,11 +424,12 @@ export default function App() {
         setIsLoading(false);
         
         const rawWindows = msg.windows || [];
-        const layouts = calculateWindowLayouts(rawWindows.length);
-        
+        const layouts = calculateWindowLayouts(rawWindows);
+
         const windowList: WindowConfig[] = rawWindows.map((w: any, i: number) => ({
           id: w.id,
           name: w.name || w.autoName || (w.isMain ? 'Main' : `Window ${i}`),
+          type: w.type || 'terminal',
           x: layouts[i]?.x ?? 0,
           y: layouts[i]?.y ?? 0,
           width: layouts[i]?.width ?? 1,
@@ -447,12 +454,13 @@ export default function App() {
           const newWindowData = {
             id: w.id,
             name: w.name || w.autoName || `Window ${prev.length + 1}`,
+            type: w.type || 'terminal' as 'terminal' | 'media',
             isMain: w.isMain ?? prev.length === 0,
             isMinimized: false,
           };
           const allWindows = [...prev, newWindowData as WindowConfig];
-          const layouts = calculateWindowLayouts(allWindows.length);
-          
+          const layouts = calculateWindowLayouts(allWindows);
+
           return allWindows.map((win, i) => ({
             ...win,
             x: layouts[i]?.x ?? 0,
@@ -470,7 +478,7 @@ export default function App() {
         doDestroyTerminal(msg.windowId);
         setWindows(prev => {
           const remaining = prev.filter(w => w.id !== msg.windowId);
-          const layouts = calculateWindowLayouts(remaining.length);
+          const layouts = calculateWindowLayouts(remaining);
           return remaining.map((win, i) => ({
             ...win,
             x: layouts[i]?.x ?? 0,
@@ -501,10 +509,12 @@ export default function App() {
         const terminal = handle?.terminal;
 
         if (terminal && msg.data) {
-          // Step 2: Single RAF (reduced from 3 nested RAFs)
+          // Step 2: Filter thinking output before restore write (defense-in-depth)
+          const filteredData = filterThinkingOutput(msg.data);
+          // Single RAF (reduced from 3 nested RAFs)
           requestAnimationFrame(() => {
             terminal.reset();
-            terminal.write(msg.data, () => {
+            terminal.write(filteredData, () => {
               terminal.scrollToBottom();
               // Step 3: Exit restore mode in write callback
               outputPipelineRef.current?.setRestoreInProgress(msg.windowId, false);
@@ -565,9 +575,10 @@ export default function App() {
 
       case 'window:replay-response': {
         // Write replayed data directly to terminal (bypasses pipeline discard logic)
+        // Filter thinking output before writing (defense-in-depth)
         if (msg.data) {
           const handle = terminalRefs.current.get(msg.windowId);
-          handle?.terminal?.write(msg.data);
+          handle?.terminal?.write(filterThinkingOutput(msg.data));
         }
         break;
       }
@@ -625,6 +636,22 @@ export default function App() {
         break;
       }
 
+      case 'context:warning':
+        toast.warning(msg.message);
+        break;
+
+      case 'music:dock:restore':
+        if (msg.state) {
+          setMusicDockState(msg.state);
+        }
+        break;
+
+      case 'artifact:history':
+        if (msg.artifacts) {
+          setArtifactHistory(msg.artifacts);
+        }
+        break;
+
       case 'error':
         console.error('WebSocket error:', msg.code, msg.message);
         if (msg.code === 'SESSION_NOT_FOUND') {
@@ -640,13 +667,16 @@ export default function App() {
   }, []);
 
   const wasConnectedRef = useRef(false);
+  // CF-B fix: Use windowsRef instead of closing over windows array.
+  // This prevents handleStateChange from being recreated whenever windows
+  // change, which would propagate through useWebSocket.
   const handleStateChange = useCallback((newState: ConnectionState) => {
     if (newState === 'reconnecting' || newState === 'disconnected') {
       // Reset pipeline state per window on disconnect/reconnect
       // Uses resetState to preserve lastProcessedSeq for replay on reconnect
       const pipeline = outputPipelineRef.current;
       if (pipeline) {
-        for (const w of windows) {
+        for (const w of windowsRef.current) {
           pipeline.resetState(w.id);
         }
       }
@@ -664,7 +694,7 @@ export default function App() {
 
         // Re-subscribe all existing windows to trigger restore after reconnection
         // This ensures terminal content is restored after network hiccups
-        windows.forEach(win => {
+        windowsRef.current.forEach(win => {
           const handle = terminalRefs.current.get(win.id);
           if (handle?.terminal) {
             sendMessageRef.current?.({
@@ -678,7 +708,7 @@ export default function App() {
       }
       wasConnectedRef.current = true;
     }
-  }, [refetchMissedArtifacts, windows]);
+  }, [refetchMissedArtifacts]);
 
   // Safety net: force exit loading state after 10 seconds
   useEffect(() => {
@@ -693,7 +723,8 @@ export default function App() {
   const wsUrl = useMemo(() => {
     if (showWelcome) return '';
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/ws`;
+    const wsPath = (window as any).__ZEUS_WS_PATH__ || '/ws';
+    return `${protocol}//${window.location.host}${wsPath}`;
   }, [showWelcome]);
 
   const { send: wsSend, state: connectionState, reconnectIn, reconnectNow, latency } = useWebSocket({
@@ -706,18 +737,22 @@ export default function App() {
     sendMessageRef.current = wsSend;
   }, [wsSend]);
 
-  // Track if we're subscribed to todo updates
+  // Track if we're subscribed to todo/artifact/music updates
   const todoSubscribedRef = useRef(false);
+  const artifactSubscribedRef = useRef(false);
+  const musicSubscribedRef = useRef(false);
 
   // Reset subscription state when disconnected
   useEffect(() => {
     if (connectionState === 'disconnected' || connectionState === 'connecting') {
       todoSubscribedRef.current = false;
+      artifactSubscribedRef.current = false;
+      musicSubscribedRef.current = false;
       setTodosLoading(true);
     }
   }, [connectionState]);
 
-  // Subscribe to todo updates once when connected
+  // Subscribe to todo, artifact, and music updates once when connected
   useEffect(() => {
     if (!sendMessageRef.current || connectionState !== 'connected') return;
 
@@ -726,6 +761,16 @@ export default function App() {
       setTodosLoading(true);
       sendMessageRef.current({ type: 'todo:subscribe', windowId: 'global' });
       todoSubscribedRef.current = true;
+    }
+
+    if (!artifactSubscribedRef.current) {
+      sendMessageRef.current({ type: 'artifact:subscribe' });
+      artifactSubscribedRef.current = true;
+    }
+
+    if (!musicSubscribedRef.current) {
+      sendMessageRef.current({ type: 'music:subscribe' });
+      musicSubscribedRef.current = true;
     }
   }, [connectionState]);
 
@@ -785,6 +830,46 @@ export default function App() {
     sendMessageRef.current?.(message);
   }, []);
 
+  const handleDockUpdate = useCallback((state: MusicDockState) => {
+    setMusicDockState(state);
+    sendMessage({ type: 'music:dock:update', state });
+  }, [sendMessage]);
+
+  const handleYoutubeButtonDragStart = useCallback((e: React.MouseEvent) => {
+    setIsDraggingYoutubeBtn(true);
+    youtubeDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startPosX: youtubeButtonPos.x,
+      startPosY: youtubeButtonPos.y,
+    };
+  }, [youtubeButtonPos]);
+
+  useEffect(() => {
+    if (!isDraggingYoutubeBtn) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!youtubeDragRef.current) return;
+      const deltaX = e.clientX - youtubeDragRef.current.startX;
+      const deltaY = e.clientY - youtubeDragRef.current.startY;
+      const newX = Math.max(0, Math.min(window.innerWidth - 48, youtubeDragRef.current.startPosX + deltaX));
+      const newY = Math.max(0, Math.min(window.innerHeight - 48, youtubeDragRef.current.startPosY + deltaY));
+      setYoutubeButtonPos({ x: newX, y: newY });
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingYoutubeBtn(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingYoutubeBtn]);
+
   const handleWindowFocus = useCallback((id: string) => {
     setActiveWindowId(id);
     sendMessage({ type: 'window:focus', windowId: id });
@@ -811,7 +896,7 @@ export default function App() {
       resizeCoordinatorRef.current.triggerResize();
     }, 220);
     return () => { if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current); };
-  }, [sidePanelOpen, sidePanelExpanded, todoPanelExpanded, minimapVisible]);
+  }, [sidePanelOpen, sidePanelExpanded, todoPanelExpanded, todoPanelWidth, minimapVisible]);
 
   const fitTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
@@ -1022,9 +1107,10 @@ export default function App() {
         const pendingRestore = pendingRestoreRef.current.get(windowId);
         if (pendingRestore && handle.terminal) {
           pendingRestoreRef.current.delete(windowId);
+          const filteredPending = filterThinkingOutput(pendingRestore);
           requestAnimationFrame(() => {
             handle.terminal?.reset();
-            handle.terminal?.write(pendingRestore, () => {
+            handle.terminal?.write(filteredPending, () => {
               handle.terminal?.scrollToBottom();
               // Exit restore mode now that pending content is flushed
               outputPipelineRef.current?.setRestoreInProgress(windowId, false);
@@ -1069,6 +1155,247 @@ export default function App() {
       </div>
     );
   }, [fontSize, isMobile, sendMessage, toast]);
+
+  // Music player control callbacks (shared between floating and window modes)
+  const handleTogglePlay = useCallback(() => {
+    setMusicPlayerState(prev => ({ ...prev, isPlaying: !prev.isPlaying }));
+  }, []);
+
+  const handleVolumeChange = useCallback((volume: number) => {
+    setMusicPlayerState(prev => ({ ...prev, volume }));
+  }, []);
+
+  const handleToggleMute = useCallback(() => {
+    setMusicPlayerState(prev => ({ ...prev, isMuted: !prev.isMuted }));
+  }, []);
+
+  const handleSeek = useCallback((time: number) => {
+    setMusicPlayerState(prev => ({ ...prev, currentTime: time }));
+  }, []);
+
+  const handleLoadVideo = useCallback((url: string) => {
+    const videoId = extractVideoId(url);
+    if (videoId) {
+      setMusicPlayerState(prev => ({
+        ...prev,
+        videoId,
+        thumbnailUrl: getYouTubeThumbnail(videoId, 'medium'),
+        isPlaying: false,
+      }));
+    }
+  }, []);
+
+  const handlePlaybackUpdate = useCallback((currentTime: number, duration: number) => {
+    setMusicPlayerState(prev => ({ ...prev, currentTime, duration }));
+  }, []);
+
+  const handleVideoTitleChange = useCallback((title: string) => {
+    setMusicPlayerState(prev => ({ ...prev, videoTitle: title }));
+  }, []);
+
+  const handleToggleStar = useCallback(async () => {
+    if (!musicPlayerState.videoId) return;
+
+    const video = {
+      videoId: musicPlayerState.videoId,
+      videoTitle: musicPlayerState.videoTitle || 'Unknown',
+      thumbnailUrl: musicPlayerState.thumbnailUrl || getYouTubeThumbnail(musicPlayerState.videoId, 'medium'),
+    };
+
+    const isStarred = starredVideos.some(v => v.videoId === musicPlayerState.videoId);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (csrfTokenRef.current) {
+      headers['x-csrf-token'] = csrfTokenRef.current;
+    }
+
+    if (isStarred) {
+      setStarredVideos(prev => prev.filter(v => v.videoId !== musicPlayerState.videoId));
+      try {
+        const res = await fetch(apiUrl(`/music/starred/${musicPlayerState.videoId}`), {
+          method: 'DELETE',
+          headers,
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setStarredVideos(data.data);
+        }
+      } catch (err) {
+        console.error('Failed to unstar video:', err);
+      }
+    } else {
+      setStarredVideos(prev => [{ ...video, starredAt: Date.now() }, ...prev]);
+      try {
+        const res = await fetch(apiUrl('/music/starred'), {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify(video),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setStarredVideos(data.data);
+        }
+      } catch (err) {
+        console.error('Failed to star video:', err);
+        setStarredVideos(prev => prev.filter(v => v.videoId !== musicPlayerState.videoId));
+      }
+    }
+  }, [musicPlayerState.videoId, musicPlayerState.videoTitle, musicPlayerState.thumbnailUrl, starredVideos]);
+
+  const handleRemoveStarred = useCallback(async (videoId: string) => {
+    setStarredVideos(prev => prev.filter(v => v.videoId !== videoId));
+    try {
+      const headers: Record<string, string> = {};
+      if (csrfTokenRef.current) {
+        headers['x-csrf-token'] = csrfTokenRef.current;
+      }
+      const res = await fetch(apiUrl(`/music/starred/${videoId}`), {
+        method: 'DELETE',
+        headers,
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStarredVideos(data.data);
+      }
+    } catch (err) {
+      console.error('Failed to remove starred video:', err);
+    }
+  }, []);
+
+  const handlePlayFromPlaylist = useCallback((video: StarredVideo) => {
+    setMusicPlayerState(prev => ({
+      ...prev,
+      videoId: video.videoId,
+      videoTitle: video.videoTitle,
+      thumbnailUrl: video.thumbnailUrl,
+      isPlaying: true,
+    }));
+  }, []);
+
+  const isCurrentVideoStarred = musicPlayerState.videoId
+    ? starredVideos.some(v => v.videoId === musicPlayerState.videoId)
+    : false;
+
+  // Refs for music state to avoid renderWindow instability (RC-1 fix)
+  // musicPlayerState changes ~4x/sec during playback; using refs prevents
+  // SplitView re-renders that cause terminal pulsing
+  const musicPlayerStateRef = useRef(musicPlayerState);
+  musicPlayerStateRef.current = musicPlayerState;
+  const starredVideosRef = useRef(starredVideos);
+  starredVideosRef.current = starredVideos;
+  const isCurrentVideoStarredRef = useRef(isCurrentVideoStarred);
+  isCurrentVideoStarredRef.current = isCurrentVideoStarred;
+  const showPlaylistRef = useRef(showPlaylist);
+  showPlaylistRef.current = showPlaylist;
+
+  // Check if a media window already exists
+  const hasMediaWindow = windows.some(w => w.type === 'media');
+
+  // Mode toggle handlers
+  const handleDockToWindow = useCallback(() => {
+    if (!sessionId) return;
+
+    // Don't create multiple media windows
+    const existingMediaWindow = windows.find(w => w.type === 'media');
+    if (existingMediaWindow) {
+      // Focus the existing media window instead
+      sendMessage({ type: 'window:focus', windowId: existingMediaWindow.id });
+      setMusicPlayerVisible(false);
+      return;
+    }
+
+    // Create media window
+    sendMessage({
+      type: 'window:create',
+      sessionId,
+      windowType: 'media',
+    });
+
+    // Hide floating player
+    setMusicPlayerVisible(false);
+
+    // State transfers automatically via shared musicPlayerState
+  }, [sessionId, sendMessage, windows]);
+
+  const handleUndockToFloat = useCallback((windowId: string) => {
+    // Close media window
+    sendMessage({ type: 'window:close', windowId });
+
+    // Show floating player
+    setMusicPlayerVisible(true);
+
+    // State persists via musicPlayerState
+  }, [sendMessage]);
+
+  // Dispatcher function that routes rendering based on window type
+  // RC-1 fix: Uses refs for music state so this callback stays stable during
+  // playback updates. Only stable handler refs + renderTerminal as deps.
+  const renderWindow = useCallback((
+    windowId: string,
+    isFocused: boolean,
+    windowType: 'terminal' | 'media'
+  ) => {
+    if (windowType === 'media') {
+      const mps = musicPlayerStateRef.current;
+      return (
+        <div className="media-window-container" style={{ width: '100%', height: '100%' }}>
+          <MusicPlayerContent
+            mode={mps.mode || 'video'}
+            videoId={mps.videoId || null}
+            videoTitle={mps.videoTitle || null}
+            thumbnailUrl={mps.thumbnailUrl || null}
+            isPlaying={mps.isPlaying || false}
+            volume={mps.volume || 50}
+            isMuted={mps.isMuted || false}
+            currentTime={mps.currentTime || 0}
+            duration={mps.duration || 0}
+            onDragStart={() => {}} // No-op in window mode - window handles dragging
+            onTogglePlay={handleTogglePlay}
+            onVolumeChange={handleVolumeChange}
+            onToggleMute={handleToggleMute}
+            onSeek={handleSeek}
+            onLoadVideo={handleLoadVideo}
+            onToggleMode={() => handleUndockToFloat(windowId)}
+            onMinimize={() => {
+              // Minimize via SplitView (not implemented yet)
+              console.log('Minimize window (SplitView feature)');
+            }}
+            onClose={() => handleUndockToFloat(windowId)}
+            onPlaybackUpdate={handlePlaybackUpdate}
+            onTitleChange={handleVideoTitleChange}
+            starredVideos={starredVideosRef.current}
+            isCurrentVideoStarred={isCurrentVideoStarredRef.current}
+            showPlaylist={showPlaylistRef.current}
+            onToggleStar={handleToggleStar}
+            onTogglePlaylist={() => setShowPlaylist(prev => !prev)}
+            onPlayFromPlaylist={handlePlayFromPlaylist}
+            onRemoveStarred={handleRemoveStarred}
+            isFullscreen={false}
+            onToggleFullscreen={() => {}} // No-op in window mode
+            onResizeStart={() => {}} // No-op in window mode - window handles resizing
+          />
+        </div>
+      );
+    }
+
+    // Default: terminal window
+    return renderTerminal(windowId, isFocused);
+  }, [
+    renderTerminal,
+    handleTogglePlay,
+    handleVolumeChange,
+    handleToggleMute,
+    handleSeek,
+    handleLoadVideo,
+    handlePlaybackUpdate,
+    handleVideoTitleChange,
+    handleToggleStar,
+    handlePlayFromPlaylist,
+    handleRemoveStarred,
+    handleUndockToFloat,
+  ]);
 
   const handleQuickKey = useCallback((value: string) => {
     if (activeWindowId) {
@@ -1301,6 +1628,13 @@ export default function App() {
               setMinimapVisible(prev => !prev);
             }
             break;
+          case 'a':
+          case 'A':
+            if (e.shiftKey) {
+              e.preventDefault();
+              setCanvasViewerOpen(prev => !prev);
+            }
+            break;
         }
       }
     };
@@ -1341,7 +1675,7 @@ export default function App() {
   }, []);
 
   if (showWelcome) {
-    return <WelcomeScreen onStart={() => setShowWelcome(false)} />;
+    return <WelcomePage onStart={() => setShowWelcome(false)} />;
   }
 
   const toolbarContent = (
@@ -1363,9 +1697,17 @@ export default function App() {
         </div>
       </div>
       <div className="flex items-center gap-1.5 sm:gap-2">
+        <TemplateToolbar
+          onExecuteCommand={handleExecuteCommand}
+        />
         <span className="text-[12px] sm:text-sm text-[#a1a1aa] font-medium tabular-nums px-2.5 py-1.5 rounded-md bg-white/[0.03] border border-white/[0.04]">{windows.length}/6</span>
         <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent" />
         <ProjectNavigator onSelectProject={handleProjectSelect} />
+        <ArtifactToolbarButton
+          unreadCount={canvasUnreadCount}
+          totalCount={canvasArtifacts.length}
+          onOpen={() => setCanvasViewerOpen(true)}
+        />
         <button
           onClick={(e) => { e.stopPropagation(); setQuickKeysVisible(!quickKeysVisible); }}
           onMouseDown={(e) => e.stopPropagation()}
@@ -1457,6 +1799,7 @@ export default function App() {
           onToggle={() => setTodoPanelExpanded(prev => !prev)}
           sessions={todoSessions}
           isLoading={todosLoading}
+          onWidthChange={setTodoPanelWidth}
         />
         <SplitView
           windows={windows}
@@ -1468,10 +1811,10 @@ export default function App() {
           onLayoutChange={handleLayoutChange}
           onAddWindow={handleAddWindow}
           onWindowRename={handleWindowRename}
-          renderTerminal={renderTerminal}
+          renderWindow={renderWindow}
           sidePanelOpen={sidePanelOpen}
           minimapVisible={minimapVisible}
-          leftOffset={todoPanelExpanded ? 280 : 48}
+          leftOffset={todoPanelExpanded ? todoPanelWidth : 48}
           contextUsage={contextUsage}
           todoCount={todoCount}
           todoHasActive={todoHasActive}
@@ -1527,42 +1870,77 @@ export default function App() {
         />
       )}
       <UploadProgress />
-      {/* Music Player Toggle Button - position adjusts based on TodoPanel */}
+      {/* Floating YouTube toggle button */}
       <button
-        onClick={() => {
-          console.log('[App] Toggle button clicked - current musicPlayerVisible:', musicPlayerVisible);
-          const newVisible = !musicPlayerVisible;
-          console.log('[App] Setting musicPlayerVisible to:', newVisible);
-          setMusicPlayerVisible(newVisible);
-          setMusicPlayerState(prev => {
-            const newMode = newVisible ? 'audio' : 'hidden';
-            console.log('[App] Setting musicPlayerState.mode to:', newMode, 'prev:', prev);
-            return {
-              ...prev,
-              mode: newMode,
-            };
-          });
+        onMouseDown={(e) => {
+          // Prevent click from firing during drag
+          const startX = e.clientX;
+          const startY = e.clientY;
+          const mouseUpHandler = (upE: MouseEvent) => {
+            const distance = Math.sqrt(
+              Math.pow(upE.clientX - startX, 2) + Math.pow(upE.clientY - startY, 2)
+            );
+            // Only trigger click if moved less than 5px
+            if (distance < 5) {
+              setMusicPlayerVisible(!musicPlayerVisible);
+              setMusicPlayerState(prev => ({
+                ...prev,
+                mode: musicPlayerVisible ? 'hidden' : 'audio',
+              }));
+            }
+            document.removeEventListener('mouseup', mouseUpHandler);
+          };
+          document.addEventListener('mouseup', mouseUpHandler);
+          handleYoutubeButtonDragStart(e);
         }}
-        className={`fixed bottom-20 z-[9998] w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 ${
-          musicPlayerVisible
-            ? 'bg-[#00d4ff]/20 text-[#00d4ff] border border-[#00d4ff]/30 shadow-[0_0_12px_rgba(0,212,255,0.3)]'
-            : 'bg-[#111118]/90 text-[#71717a] border border-white/10 hover:text-white hover:border-white/20'
-        }`}
-        style={{ left: todoPanelExpanded ? 296 : 64 }}
-        title="Toggle Music Player (Ctrl+Shift+M)"
+        className="fixed z-[9998] w-12 h-12 rounded-full
+          bg-black/90 hover:bg-black
+          shadow-[0_0_20px_rgba(0,0,0,0.5)]
+          hover:shadow-[0_0_32px_rgba(0,212,255,0.3)]
+          flex items-center justify-center
+          transition-all duration-200
+          border border-white/[0.1]
+          cursor-grab active:cursor-grabbing"
+        style={{
+          left: `${youtubeButtonPos.x}px`,
+          top: `${youtubeButtonPos.y}px`,
+          backdropFilter: 'blur(8px)'
+        }}
+        title="Toggle YouTube Player (Ctrl+Shift+M) - Drag to reposition"
       >
-        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-          <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+        <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
         </svg>
+        {musicPlayerVisible && (
+          <span className="absolute -top-1 -right-1 w-3 h-3
+            bg-[#22c55e] rounded-full border-2 border-black
+            animate-pulse" />
+        )}
       </button>
-      <MusicPlayer
-        initialState={{
-          ...musicPlayerState,
-          mode: musicPlayerVisible ? (musicPlayerState.mode === 'hidden' ? 'audio' : musicPlayerState.mode) : 'hidden',
-        }}
-        onStateChange={handleMusicPlayerStateChange}
-        onSync={handleMusicPlayerSync}
-      />
+
+      {musicPlayerVisible && (
+        <MusicPlayer
+          initialState={{
+            ...musicPlayerState,
+            mode: musicPlayerVisible ? (musicPlayerState.mode === 'hidden' ? 'audio' : musicPlayerState.mode) : 'hidden',
+          }}
+          onStateChange={handleMusicPlayerStateChange}
+          onSync={handleMusicPlayerSync}
+          onDockToWindow={handleDockToWindow}
+        />
+      )}
+      {canvasViewerOpen && canvasArtifacts.length > 0 && (
+        <FullscreenViewer
+          artifact={canvasArtifacts[activeArtifactIndex] || canvasArtifacts[0]}
+          artifacts={canvasArtifacts}
+          currentIndex={activeArtifactIndex}
+          viewMode={viewMode}
+          onClose={() => setCanvasViewerOpen(false)}
+          onToggleViewMode={toggleViewMode}
+          onSendToTerminal={handleSendArtifactToTerminal}
+          onNavigate={setActiveArtifactIndex}
+        />
+      )}
     </div>
     </FileDropZone>
     </ResizeCoordinatorContext.Provider>

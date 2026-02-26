@@ -33,6 +33,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('window:create'),
     sessionId: uuidSchema,
+    windowType: z.enum(['terminal', 'media']).optional(),
   }),
   z.object({
     type: z.literal('window:close'),
@@ -94,6 +95,39 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('context:unsubscribe'),
     windowId: uuidSchema,
+  }),
+  z.object({
+    type: z.literal('music:subscribe'),
+  }),
+  z.object({
+    type: z.literal('music:unsubscribe'),
+  }),
+  z.object({
+    type: z.literal('music:sync'),
+    state: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    type: z.literal('music:load'),
+    videoId: z.string().min(1).max(20),
+    videoTitle: z.string().max(500).optional(),
+    thumbnailUrl: z.string().max(2000).optional(),
+  }),
+  z.object({
+    type: z.literal('music:dock:update'),
+    state: z.object({
+      position: z.enum(['bottom-left', 'bottom-right', 'top-left', 'top-right', 'floating']),
+      size: z.object({
+        width: z.number().min(100).max(1920),
+        height: z.number().min(60).max(1080),
+      }),
+      collapsed: z.boolean(),
+    }),
+  }),
+  z.object({
+    type: z.literal('artifact:subscribe'),
+  }),
+  z.object({
+    type: z.literal('artifact:unsubscribe'),
   }),
 ]);
 

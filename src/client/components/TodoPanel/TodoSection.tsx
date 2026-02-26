@@ -45,7 +45,6 @@ function TodoSectionComponent({
     const pending = sortedTodos.filter((t) => t.status === 'pending');
     const completed = sortedTodos.filter((t) => t.status === 'completed');
 
-    // Show all in-progress, up to 2 pending, and 1 most recent completed
     const visible: TodoItemType[] = [
       ...inProgress,
       ...pending.slice(0, 2),
@@ -58,22 +57,24 @@ function TodoSectionComponent({
   }, [sortedTodos, showAllTodos]);
 
   // Count stats
-  const inProgressCount = useMemo(
-    () => todos.filter((t) => t.status === 'in_progress').length,
-    [todos]
-  );
-  const pendingCount = useMemo(
-    () => todos.filter((t) => t.status === 'pending').length,
-    [todos]
-  );
-  const completedCount = useMemo(
-    () => todos.filter((t) => t.status === 'completed').length,
-    [todos]
-  );
+  const { inProgressCount, pendingCount, completedCount } = useMemo(() => {
+    let ip = 0;
+    let pend = 0;
+    let comp = 0;
+    for (const t of todos) {
+      if (t.status === 'in_progress') ip++;
+      else if (t.status === 'pending') pend++;
+      else if (t.status === 'completed') comp++;
+    }
+    return {
+      inProgressCount: ip,
+      pendingCount: pend,
+      completedCount: comp,
+    };
+  }, [todos]);
 
   const handleHeaderClick = useCallback(() => {
     setSectionExpanded((prev) => !prev);
-    // Reset showAllTodos when collapsing
     if (sectionExpanded) {
       setShowAllTodos(false);
     }
@@ -103,70 +104,88 @@ function TodoSectionComponent({
       <button
         onClick={handleHeaderClick}
         className={`
-          w-full flex items-center justify-between px-3 py-2
+          w-full flex flex-col gap-1.5 px-3 py-2.5
           transition-all duration-150 text-left
           ${isActive ? 'bg-[#00d4ff]/[0.04]' : 'hover:bg-white/[0.02]'}
         `}
       >
-        <div className="flex items-center gap-2 min-w-0">
-          {/* Expand/collapse chevron */}
-          <svg
-            className={`
-              w-3 h-3 text-[#71717a] transition-transform duration-150 flex-shrink-0
-              ${sectionExpanded ? 'rotate-90' : ''}
-            `}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            strokeWidth={2}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Expand/collapse chevron */}
+            <svg
+              className={`
+                w-3 h-3 text-[#71717a] transition-transform duration-150 flex-shrink-0
+                ${sectionExpanded ? 'rotate-90' : ''}
+              `}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
 
-          {/* Session name */}
-          <span
-            className={`
-              text-[12px] font-medium truncate
-              ${isActive ? 'text-[#00d4ff]' : 'text-[#a1a1aa]'}
-            `}
-          >
-            {sessionName}
-          </span>
+            {/* Session name - larger heading */}
+            <span
+              className={`
+                text-[13px] font-semibold truncate
+                ${isActive ? 'text-[#00d4ff]' : 'text-[#d4d4d8]'}
+              `}
+            >
+              {sessionName}
+            </span>
 
-          {/* Active indicator dot */}
-          {isActive && (
-            <span className="w-1.5 h-1.5 rounded-full bg-[#00d4ff] shadow-[0_0_6px_rgba(0,212,255,0.5)] flex-shrink-0" />
-          )}
+            {/* Active indicator dot */}
+            {isActive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#00d4ff] shadow-[0_0_6px_rgba(0,212,255,0.5)] flex-shrink-0" />
+            )}
+          </div>
+
+          {/* Stats badges */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {inProgressCount > 0 && (
+              <span className="flex items-center gap-1 text-[9px] text-[#00d4ff]">
+                <span className="drop-shadow-[0_0_3px_rgba(0,212,255,0.5)] animate-pulse">
+                  ●
+                </span>
+                {inProgressCount}
+              </span>
+            )}
+            {pendingCount > 0 && (
+              <span className="flex items-center gap-1 text-[9px] text-[#a1a1aa]">
+                <span>○</span>
+                {pendingCount}
+              </span>
+            )}
+            {completedCount > 0 && (
+              <span className="flex items-center gap-1 text-[9px] text-[#22c55e]/60">
+                <span>✓</span>
+                {completedCount}
+              </span>
+            )}
+          </div>
         </div>
 
-        {/* Stats badges */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {inProgressCount > 0 && (
-            <span className="flex items-center gap-1 text-[9px] text-[#00d4ff]">
-              <span className="drop-shadow-[0_0_3px_rgba(0,212,255,0.5)] animate-pulse">
-                ●
-              </span>
-              {inProgressCount}
-            </span>
-          )}
-          {pendingCount > 0 && (
-            <span className="flex items-center gap-1 text-[9px] text-[#a1a1aa]">
-              <span>○</span>
-              {pendingCount}
-            </span>
-          )}
+        {/* Progress bar under header */}
+        <div className="w-full h-1 rounded-full bg-white/[0.04] overflow-hidden flex">
           {completedCount > 0 && (
-            <span className="flex items-center gap-1 text-[9px] text-[#22c55e]/60">
-              <span>✓</span>
-              {completedCount}
-            </span>
+            <div
+              className="h-full bg-[#22c55e]/50 transition-all duration-500"
+              style={{ width: `${(completedCount / todos.length) * 100}%` }}
+            />
+          )}
+          {inProgressCount > 0 && (
+            <div
+              className="h-full bg-[#00d4ff]/70 transition-all duration-500"
+              style={{ width: `${(inProgressCount / todos.length) * 100}%` }}
+            />
           )}
         </div>
       </button>
 
       {/* Expanded content */}
       {sectionExpanded && (
-        <div className="pb-1">
+        <div className="pb-1.5 space-y-0.5">
           {visibleTodos.map((todo) => (
             <TodoItem key={todo.id} todo={todo} />
           ))}

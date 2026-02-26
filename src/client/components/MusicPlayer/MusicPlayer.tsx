@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { apiUrl } from '../../services/api';
 import { MusicPlayerState, MusicPlayerMode, StarredVideo, DEFAULT_MUSIC_PLAYER_STATE, extractVideoId, getYouTubeThumbnail } from '../../../shared/musicProtocol.js';
 import { MusicPlayerMini } from './MusicPlayerMini.js';
 import { MusicPlayerContent } from './MusicPlayerContent.js';
@@ -8,19 +9,21 @@ interface MusicPlayerProps {
   initialState?: Partial<MusicPlayerState>;
   onStateChange?: (state: MusicPlayerState) => void;
   onSync?: (state: Partial<MusicPlayerState>) => void;
+  onDockToWindow?: () => void;
 }
 
 export const MusicPlayer: React.FC<MusicPlayerProps> = ({
   initialState,
   onStateChange,
   onSync,
+  onDockToWindow,
 }) => {
   const [state, setState] = useState<MusicPlayerState>(() => ({
     ...DEFAULT_MUSIC_PLAYER_STATE,
     position: {
-      // Position at bottom-right, accounting for player width (340px) and height (~200px)
-      x: typeof window !== 'undefined' ? Math.max(20, window.innerWidth - 360) : 100,
-      y: typeof window !== 'undefined' ? Math.max(20, window.innerHeight - 220) : 100,
+      // Position at bottom-left, flush with sidebar
+      x: 16,
+      y: typeof window !== 'undefined' ? window.innerHeight - 280 : 100,
     },
     ...initialState,
   }));
@@ -32,14 +35,18 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
   const [size, setSize] = useState({ width: 400, height: 225 }); // 16:9 aspect ratio default
   const [isResizing, setIsResizing] = useState(false);
   const [resizeDirection, setResizeDirection] = useState<string | null>(null);
+  const [nearCorner, setNearCorner] = useState<string | null>(null);
   const dragStartRef = useRef<{ x: number; y: number; posX: number; posY: number } | null>(null);
   const resizeStartRef = useRef<{ x: number; y: number; width: number; height: number; posX: number; posY: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const csrfTokenRef = useRef<string | null>(null);
 
+  const SNAP_THRESHOLD = 80; // px from corner to trigger snap
+  const DOCK_MARGIN = 16;
+
   // Fetch CSRF token on mount
   useEffect(() => {
-    fetch('/api/csrf-token', { credentials: 'include' })
+    fetch(apiUrl('/csrf-token'), { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         csrfTokenRef.current = data.data?.token || null;
@@ -49,7 +56,7 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
 
   // Fetch starred videos on mount
   useEffect(() => {
-    fetch('/api/music/starred', { credentials: 'include' })
+    fetch(apiUrl('/music/starred'), { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (data.data) {
@@ -83,7 +90,7 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
       // Optimistic update
       setStarredVideos(prev => prev.filter(v => v.videoId !== state.videoId));
       try {
-        const res = await fetch(`/api/music/starred/${state.videoId}`, {
+        const res = await fetch(apiUrl(`/music/starred/${state.videoId}`), {
           method: 'DELETE',
           headers,
           credentials: 'include',
@@ -94,7 +101,7 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
       } catch (err) {
         console.error('Failed to unstar video:', err);
         // Rollback on failure - refetch
-        const res = await fetch('/api/music/starred', { credentials: 'include' });
+        const res = await fetch(apiUrl('/music/starred'), { credentials: 'include' });
         const data = await res.json();
         if (data.data) setStarredVideos(data.data);
       }
@@ -102,7 +109,7 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
       // Optimistic update
       setStarredVideos(prev => [{ ...video, starredAt: Date.now() }, ...prev]);
       try {
-        const res = await fetch('/api/music/starred', {
+        const res = await fetch(apiUrl('/music/starred'), {
           method: 'POST',
           headers,
           credentials: 'include',
@@ -127,7 +134,7 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
       if (csrfTokenRef.current) {
         headers['x-csrf-token'] = csrfTokenRef.current;
       }
-      const res = await fetch(`/api/music/starred/${videoId}`, {
+      const res = await fetch(apiUrl(`/music/starred/${videoId}`), {
         method: 'DELETE',
         headers,
         credentials: 'include',
@@ -330,15 +337,41 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
     ));
 
     setState(prev => ({ ...prev, position: { x: newX, y: newY } }));
-  }, [isDragging]);
+
+    // Detect if near bottom-left corner for snap zone
+    const playerW = containerRef.current?.offsetWidth || 320;
+    const playerH = containerRef.current?.offsetHeight || 80;
+    const centerX = newX + playerW / 2;
+    const centerY = newY + playerH / 2;
+
+    // Only check bottom-left corner
+    const bottomLeftX = 0;
+    const bottomLeftY = window.innerHeight;
+    const dist = Math.sqrt((centerX - bottomLeftX) ** 2 + (centerY - bottomLeftY) ** 2);
+
+    setNearCorner(dist < SNAP_THRESHOLD * 2 ? 'bottom-left' : null);
+  }, [isDragging, SNAP_THRESHOLD]);
 
   const handleDragEnd = useCallback(() => {
     if (isDragging) {
       setIsDragging(false);
-      onSync?.({ position: state.position });
+
+      // Snap to bottom-left if near it
+      if (nearCorner === 'bottom-left' && containerRef.current) {
+        const playerH = containerRef.current.offsetHeight;
+        const snapX = DOCK_MARGIN;
+        const snapY = window.innerHeight - playerH - DOCK_MARGIN;
+
+        setState(prev => ({ ...prev, position: { x: snapX, y: snapY } }));
+        onSync?.({ position: { x: snapX, y: snapY } });
+      } else {
+        onSync?.({ position: state.position });
+      }
+
+      setNearCorner(null);
       dragStartRef.current = null;
     }
-  }, [isDragging, state.position, onSync]);
+  }, [isDragging, state.position, nearCorner, onSync, DOCK_MARGIN]);
 
   // Resize handling
   const handleResizeStart = useCallback((e: React.MouseEvent, direction: string) => {
@@ -496,16 +529,40 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className={`music-player music-player-${state.mode} ${isDragging ? 'is-dragging' : ''} ${isFullscreen ? 'is-fullscreen' : ''} ${isResizing ? 'is-resizing' : ''}`}
-      style={{
-        left: state.position.x,
-        top: state.position.y,
-        ...(state.mode === 'video' || isFullscreen ? { width: size.width, height: size.height } : {}),
-      }}
-      tabIndex={0}
-    >
+    <>
+      {/* Snap zone indicator (visible during drag, bottom-left only) */}
+      {isDragging && (
+        <div className="fixed inset-0 z-[89] pointer-events-none">
+          <div
+            className={`
+              absolute w-24 h-24 bottom-0 left-0 rounded-tr-2xl
+              transition-all duration-200
+              ${
+                nearCorner === 'bottom-left'
+                  ? 'bg-[#00d4ff]/20 border-2 border-[#00d4ff]/50 shadow-[0_0_30px_rgba(0,212,255,0.3)]'
+                  : 'bg-white/[0.03] border border-white/[0.06]'
+              }
+            `}
+          >
+            {nearCorner === 'bottom-left' && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-3 h-3 rounded-full bg-[#00d4ff] shadow-[0_0_12px_rgba(0,212,255,0.6)] animate-pulse" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div
+        ref={containerRef}
+        className={`music-player music-player-${state.mode} ${isDragging ? 'is-dragging' : ''} ${isFullscreen ? 'is-fullscreen' : ''} ${isResizing ? 'is-resizing' : ''}`}
+        style={{
+          left: state.position.x,
+          top: state.position.y,
+          ...(state.mode === 'video' || isFullscreen ? { width: size.width, height: size.height } : {}),
+        }}
+        tabIndex={0}
+      >
       <MusicPlayerContent
         mode={state.mode}
         videoId={state.videoId}
@@ -537,8 +594,10 @@ export const MusicPlayer: React.FC<MusicPlayerProps> = ({
         isFullscreen={isFullscreen}
         onToggleFullscreen={() => setIsFullscreen(prev => !prev)}
         onResizeStart={handleResizeStart}
+        onDockToWindow={onDockToWindow}
       />
     </div>
+    </>
   );
 };
 

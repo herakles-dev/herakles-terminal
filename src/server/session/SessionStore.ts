@@ -18,6 +18,7 @@ export interface SessionRecord {
 export interface WindowRecord {
   id: string;
   session_id: string;
+  type: string;  // 'terminal' | 'media'
   name: string | null;
   auto_name: string | null;
   position_x: number;
@@ -151,7 +152,7 @@ export interface UserLayoutRecord {
 export class SessionStore {
   private db: Database.Database;
 
-  constructor(dbPath = '/home/hercules/herakles-terminal/data/zeus.db') {
+  constructor(dbPath = process.env.DB_PATH || process.env.ZEUS_DB_PATH || `${process.env.HOME || '/home/hercules'}/herakles-terminal/data/zeus.db`) {
     const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -174,7 +175,7 @@ export class SessionStore {
         last_active_at INTEGER NOT NULL,
         state TEXT DEFAULT 'active',
         timeout_hours INTEGER DEFAULT 168,
-        working_directory TEXT DEFAULT '/home/hercules'
+        working_directory TEXT DEFAULT '${process.env.HOME || '/home/hercules'}'
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_email);
       CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
@@ -413,6 +414,13 @@ export class SessionStore {
             hidden_at INTEGER NOT NULL,
             PRIMARY KEY (user_email, template_id)
           );
+        `,
+      },
+      {
+        version: '006_add_window_type',
+        sql: `
+          ALTER TABLE windows ADD COLUMN type TEXT DEFAULT 'terminal';
+          CREATE INDEX IF NOT EXISTS idx_windows_type ON windows(type);
         `,
       },
     ];

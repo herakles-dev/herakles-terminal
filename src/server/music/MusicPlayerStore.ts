@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
-import type { MusicPlayerState, MusicPlayerMode, StarredVideo } from '../../shared/musicProtocol.js';
-import { DEFAULT_MUSIC_PLAYER_STATE } from '../../shared/musicProtocol.js';
+import type { MusicPlayerState, MusicPlayerMode, StarredVideo, MusicDockState } from '../../shared/musicProtocol.js';
+import { DEFAULT_MUSIC_PLAYER_STATE, DEFAULT_DOCK_STATE } from '../../shared/musicProtocol.js';
 
 interface MusicPlayerRow {
   user_email: string;
@@ -50,6 +50,12 @@ export class MusicPlayerStore {
     const hasStarredVideos = tableInfo.some(col => col.name === 'starred_videos');
     if (!hasStarredVideos) {
       this.db.exec("ALTER TABLE music_player_state ADD COLUMN starred_videos TEXT DEFAULT '[]'");
+    }
+
+    // Migration: Add dock_state column if it doesn't exist
+    const hasDockState = tableInfo.some(col => col.name === 'dock_state');
+    if (!hasDockState) {
+      this.db.exec(`ALTER TABLE music_player_state ADD COLUMN dock_state TEXT DEFAULT '${JSON.stringify(DEFAULT_DOCK_STATE)}'`);
     }
   }
 
@@ -153,6 +159,52 @@ export class MusicPlayerStore {
         state.currentTime ?? 0,
         state.isMuted ? 1 : 0
       );
+    }
+  }
+
+  // ============================================
+  // Dock State CRUD
+  // ============================================
+
+  getDockState(userEmail: string): MusicDockState {
+    const row = this.db.prepare(`
+      SELECT dock_state FROM music_player_state WHERE user_email = ?
+    `).get(userEmail) as { dock_state: string | null } | undefined;
+
+    if (!row?.dock_state) {
+      return { ...DEFAULT_DOCK_STATE };
+    }
+
+    try {
+      const parsed = JSON.parse(row.dock_state) as MusicDockState;
+      return {
+        position: parsed.position || DEFAULT_DOCK_STATE.position,
+        size: parsed.size || DEFAULT_DOCK_STATE.size,
+        collapsed: parsed.collapsed ?? DEFAULT_DOCK_STATE.collapsed,
+      };
+    } catch {
+      return { ...DEFAULT_DOCK_STATE };
+    }
+  }
+
+  saveDockState(userEmail: string, state: MusicDockState): void {
+    const json = JSON.stringify(state);
+
+    const existing = this.db.prepare(`
+      SELECT user_email FROM music_player_state WHERE user_email = ?
+    `).get(userEmail);
+
+    if (existing) {
+      this.db.prepare(`
+        UPDATE music_player_state
+        SET dock_state = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE user_email = ?
+      `).run(json, userEmail);
+    } else {
+      this.db.prepare(`
+        INSERT INTO music_player_state (user_email, dock_state)
+        VALUES (?, ?)
+      `).run(userEmail, json);
     }
   }
 

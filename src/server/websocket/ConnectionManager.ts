@@ -15,6 +15,9 @@ import { todoManager } from '../todo/TodoManager.js';
 import { todoFileWatcher } from '../todo/TodoFileWatcher.js';
 import { contextManager } from '../context/ContextManager.js';
 import { OutputRingBuffer } from '../window/OutputRingBuffer.js';
+import type { MusicManager } from '../music/MusicManager.js';
+import type { MusicDockState } from '../../shared/musicProtocol.js';
+import type { ArtifactManager } from '../canvas/ArtifactManager.js';
 
 interface Connection {
   id: string;
@@ -55,6 +58,8 @@ export class ConnectionManager {
   private windowSubscribeTimers: Map<string, NodeJS.Timeout> = new Map();
   private cronsInitializedForUsers: Set<string> = new Set();
   private outputRingBuffers: Map<string, OutputRingBuffer> = new Map();
+  private musicManager: MusicManager | null = null;
+  private artifactManager: ArtifactManager | null = null;
 
   constructor(
     store: SessionStore,
@@ -73,6 +78,22 @@ export class ConnectionManager {
     this.setupDeviceCallbacks();
     this.setupAutomationCallbacks();
     this.startHeartbeat();
+  }
+
+  /**
+   * Set the MusicManager for dock state WebSocket routing.
+   * Called during server initialization.
+   */
+  setMusicManager(manager: MusicManager): void {
+    this.musicManager = manager;
+  }
+
+  /**
+   * Set the ArtifactManager for artifact history WebSocket routing.
+   * Called during server initialization.
+   */
+  setArtifactManager(manager: ArtifactManager): void {
+    this.artifactManager = manager;
   }
 
   private setupAutomationCallbacks(): void {
@@ -114,6 +135,7 @@ export class ConnectionManager {
           window: {
             id: window.id,
             sessionId: window.sessionId,
+            type: window.type || 'terminal',
             name: window.name,
             autoName: window.autoName,
             positionX: window.layout.x,
@@ -313,7 +335,7 @@ export class ConnectionManager {
         break;
 
       case 'window:create':
-        this.handleWindowCreate(connection, (message as any).sessionId);
+        this.handleWindowCreate(connection, (message as any).sessionId, (message as any).windowType);
         break;
 
       case 'window:close':
@@ -381,6 +403,31 @@ export class ConnectionManager {
       case 'context:unsubscribe':
         this.handleContextUnsubscribe(connection, (message as any).windowId);
         break;
+
+      case 'music:subscribe':
+        this.handleMusicSubscribe(connection);
+        break;
+
+      case 'music:unsubscribe':
+        this.handleMusicUnsubscribe(connection);
+        break;
+
+      case 'music:dock:update':
+        this.handleMusicDockUpdate(connection, (message as any).state);
+        break;
+
+      case 'music:sync':
+      case 'music:load':
+        // These are handled via REST API currently; no-op for WebSocket
+        break;
+
+      case 'artifact:subscribe':
+        this.handleArtifactSubscribe(connection);
+        break;
+
+      case 'artifact:unsubscribe':
+        this.handleArtifactUnsubscribe(connection);
+        break;
     }
   }
 
@@ -408,6 +455,31 @@ export class ConnectionManager {
   private handleContextUnsubscribe(_connection: Connection, windowId: string): void {
     if (!windowId) return;
     contextManager.unsubscribe(windowId);
+  }
+
+  private handleMusicSubscribe(connection: Connection): void {
+    if (!this.musicManager) return;
+    this.musicManager.subscribe(connection.ws, connection.user.email);
+  }
+
+  private handleMusicUnsubscribe(connection: Connection): void {
+    if (!this.musicManager) return;
+    this.musicManager.unsubscribe(connection.ws);
+  }
+
+  private handleMusicDockUpdate(connection: Connection, state: MusicDockState): void {
+    if (!this.musicManager) return;
+    this.musicManager.handleDockUpdate(connection.ws, connection.user.email, state);
+  }
+
+  private handleArtifactSubscribe(connection: Connection): void {
+    if (!this.artifactManager) return;
+    this.artifactManager.subscribe(connection.ws, connection.user.email);
+  }
+
+  private handleArtifactUnsubscribe(connection: Connection): void {
+    if (!this.artifactManager) return;
+    this.artifactManager.unsubscribe(connection.ws);
   }
 
   private async handleSessionResume(connection: Connection, sessionId: string): Promise<void> {
@@ -476,6 +548,7 @@ export class ConnectionManager {
       windows: windows.map(w => ({
         id: w.id,
         sessionId: w.sessionId,
+        type: w.type || 'terminal',
         name: w.name,
         autoName: w.autoName,
         positionX: w.layout.x,
@@ -510,7 +583,7 @@ export class ConnectionManager {
       user_email: connection.user.email,
       auto_name: null,
       timeout_hours: config.session.defaultTimeout,
-      working_directory: '/home/hercules',
+      working_directory: process.env.HOME || '/home/hercules',
     });
 
     connection.sessionId = sessionId;
@@ -562,6 +635,7 @@ export class ConnectionManager {
       window: {
         id: mainWindow.id,
         sessionId: mainWindow.sessionId,
+        type: mainWindow.type || 'terminal',
         name: mainWindow.name,
         autoName: mainWindow.autoName,
         positionX: mainWindow.layout.x,
@@ -575,12 +649,15 @@ export class ConnectionManager {
     });
   }
 
-  private async handleWindowCreate(connection: Connection, sessionId: string): Promise<void> {
+  private async handleWindowCreate(connection: Connection, sessionId: string, windowType?: 'terminal' | 'media'): Promise<void> {
     try {
       const window = await this.windowManager.createWindow(
         sessionId,
         connection.user.email,
-        false
+        false,
+        80,
+        24,
+        windowType || 'terminal'
       );
 
       connection.windowSubscriptions.add(window.id);
@@ -600,6 +677,7 @@ export class ConnectionManager {
         window: {
           id: window.id,
           sessionId: window.sessionId,
+          type: window.type || 'terminal',
           name: window.name,
           autoName: window.autoName,
           positionX: window.layout.x,
@@ -812,6 +890,7 @@ export class ConnectionManager {
   /**
    * Auto-rename window based on directory changes (cd command detection).
    * Extracts the first directory after /home/hercules/ as the window name.
+   * Also updates context subscription to track the new project's usage.
    */
   private handleWindowAutoRename(sessionId: string, windowId: string, path: string): void {
     const projectName = this.extractProjectName(path);
@@ -827,6 +906,16 @@ export class ConnectionManager {
       name: '',
       autoName: projectName,
     });
+
+    // Update context subscription to track the new project's usage
+    // This ensures the token counter follows cd across projects
+    if (projectName !== '~') {
+      const fullPath = `/home/hercules/${projectName}`;
+      const encodedPath = '-' + fullPath.replace(/^\//, '').replace(/\//g, '-');
+      contextManager.updateProjectPath(windowId, encodedPath);
+    } else {
+      contextManager.updateProjectPath(windowId, null);
+    }
   }
 
   /**

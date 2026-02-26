@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { apiUrl } from '../../services/api';
 
 type WindowLayout = { x: number; y: number; width: number; height: number };
 
@@ -196,7 +197,7 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
 
   const fetchSavedLayouts = useCallback(async () => {
     try {
-      const res = await fetch('/api/layouts');
+      const res = await fetch(apiUrl('/layouts'));
       if (res.ok) {
         const json = await res.json();
         setSavedLayouts(json.data || []);
@@ -271,7 +272,7 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
   const handleSaveLayout = async () => {
     if (!savingName.trim() || !currentLayouts) return;
     try {
-      const res = await fetch('/api/layouts', {
+      const res = await fetch(apiUrl('/layouts'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -292,7 +293,7 @@ export default function LayoutSelector({ windowCount, onSelectLayout, currentLay
 
   const handleDeleteLayout = async (id: string) => {
     try {
-      const res = await fetch(`/api/layouts/${id}`, { method: 'DELETE' });
+      const res = await fetch(apiUrl(`/layouts/${id}`), { method: 'DELETE' });
       if (res.ok) {
         fetchSavedLayouts();
       }

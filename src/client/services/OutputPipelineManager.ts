@@ -1,4 +1,5 @@
 import type { WebGLHealthMonitor } from './WebGLHealthMonitor';
+import { filterThinkingOutput as sharedFilterThinkingOutput } from '@shared/terminalFilters';
 
 export interface OutputPipelineConfig {
   flushIntervalMs?: number;
@@ -42,6 +43,10 @@ interface WindowOutputState {
 export type FlushCallback = (windowId: string, data: string) => void;
 export type ReplayRequestCallback = (windowId: string, afterSeq: number) => void;
 export type BackpressureCallback = (windowId: string, throttle: boolean) => void;
+
+// Re-export shared filter for backward compatibility
+// (App.tsx imports { filterThinkingOutput } from this module)
+export { filterThinkingOutput } from '@shared/terminalFilters';
 
 export class OutputPipelineManager {
   private windows: Map<string, WindowOutputState> = new Map();
@@ -228,19 +233,7 @@ export class OutputPipelineManager {
    * Matches the filter in TmuxManager.capturePane() for consistency.
    */
   private filterThinkingOutput(data: string): string {
-    return data
-      .split('\n')
-      .filter(line => {
-        // Strip ANSI escape sequences for analysis
-        const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
-        if (stripped.length === 0) return true; // Keep empty lines
-        // Filter lines that are ONLY dots (e.g. "....." or ". . . .")
-        if (/^[.\s]+$/.test(stripped)) return false;
-        // Filter braille spinner lines (U+2800-U+28FF)
-        if (/^[\u2800-\u28FF\s]+$/.test(stripped)) return false;
-        return true;
-      })
-      .join('\n');
+    return sharedFilterThinkingOutput(data);
   }
 
   enqueue(windowId: string, data: string, seq?: number): void {
