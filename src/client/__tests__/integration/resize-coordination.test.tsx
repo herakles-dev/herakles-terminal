@@ -3,6 +3,15 @@ import { renderHook } from '@testing-library/react';
 import { vi } from 'vitest';
 import { useResizeCoordinator } from '../../hooks/useResizeCoordinator';
 
+function createMockFitAddon() {
+  return {
+    fit: vi.fn(),
+    proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+    activate: vi.fn(),
+    dispose: vi.fn(),
+  } as any;
+}
+
 describe('Resize Coordination Integration', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -15,9 +24,9 @@ describe('Resize Coordination Integration', () => {
   it('should coordinate resize across multiple terminals', () => {
     const { result } = renderHook(() => useResizeCoordinator());
 
-    const mockFitAddon1 = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
-    const mockFitAddon2 = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
-    const mockFitAddon3 = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const mockFitAddon1 = createMockFitAddon();
+    const mockFitAddon2 = createMockFitAddon();
+    const mockFitAddon3 = createMockFitAddon();
 
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon1 });
@@ -41,7 +50,7 @@ describe('Resize Coordination Integration', () => {
 
   it('should handle resize during output (EC-R-02)', () => {
     const { result } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const mockFitAddon = createMockFitAddon();
 
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
@@ -59,7 +68,7 @@ describe('Resize Coordination Integration', () => {
 
   it('should handle side panel toggle (EC-R-06)', () => {
     const { result } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const mockFitAddon = createMockFitAddon();
     const onResize = vi.fn();
 
     act(() => {
@@ -79,7 +88,7 @@ describe('Resize Coordination Integration', () => {
 
   it('should properly cleanup on unmount', () => {
     const { result, unmount } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const mockFitAddon = createMockFitAddon();
 
     act(() => {
       result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
@@ -96,7 +105,7 @@ describe('Resize Coordination Integration', () => {
 
   it('should debounce server resize (100ms debounce)', () => {
     const { result } = renderHook(() => useResizeCoordinator());
-    const mockFitAddon = { fit: vi.fn(), proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })), activate: vi.fn(), dispose: vi.fn() } as any;
+    const mockFitAddon = createMockFitAddon();
     const onResize = vi.fn();
 
     // Register triggers immediate resize via RAF
@@ -128,5 +137,137 @@ describe('Resize Coordination Integration', () => {
     });
 
     expect(onResize).toHaveBeenCalledTimes(1);
+  });
+
+  describe('onComplete callback (Bug 4 fix)', () => {
+    it('should call onComplete after immediate resize finishes', async () => {
+      const { result } = renderHook(() => useResizeCoordinator());
+      const mockFitAddon = createMockFitAddon();
+      const onComplete = vi.fn();
+
+      act(() => {
+        result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
+      });
+
+      mockFitAddon.fit.mockClear();
+
+      await act(async () => {
+        result.current.triggerResize(true, onComplete);
+        // runAllTimersAsync flushes both macrotasks (RAF) and microtasks (Promise.all.then)
+        await vi.runAllTimersAsync();
+      });
+
+      // onComplete should fire after resize
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(mockFitAddon.fit).toHaveBeenCalled();
+    });
+
+    it('should call onComplete even when resize lock is held', () => {
+      const { result } = renderHook(() => useResizeCoordinator());
+      const mockFitAddon = createMockFitAddon();
+      const onComplete1 = vi.fn();
+      const onComplete2 = vi.fn();
+
+      act(() => {
+        result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
+      });
+
+      // Trigger first resize to grab the lock
+      act(() => {
+        result.current.triggerResize(true, onComplete1);
+      });
+
+      // Trigger second resize while lock is held — onComplete should still be called
+      act(() => {
+        result.current.triggerResize(true, onComplete2);
+      });
+
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // Both should have been called
+      expect(onComplete2).toHaveBeenCalledTimes(1);
+    });
+
+    it('should call onComplete when animating is true', () => {
+      const { result } = renderHook(() => useResizeCoordinator());
+      const mockFitAddon = createMockFitAddon();
+      const onComplete = vi.fn();
+
+      act(() => {
+        result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
+      });
+
+      // Set animating to true
+      act(() => {
+        result.current.setAnimating(true);
+      });
+
+      act(() => {
+        result.current.triggerResize(true, onComplete);
+      });
+
+      // onComplete should fire immediately even though resize was deferred
+      expect(onComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it('should release resize lock after all targets complete', async () => {
+      const { result } = renderHook(() => useResizeCoordinator());
+      const mockFitAddon1 = createMockFitAddon();
+      const mockFitAddon2 = createMockFitAddon();
+
+      act(() => {
+        result.current.register({ id: 'term-1', fitAddon: mockFitAddon1 });
+        result.current.register({ id: 'term-2', fitAddon: mockFitAddon2 });
+      });
+
+      await act(async () => {
+        result.current.triggerResize(true);
+        await vi.runAllTimersAsync();
+      });
+
+      // After all promises settle, lock should be released (can trigger again)
+      expect(result.current.isResizeLocked()).toBe(false);
+    });
+  });
+
+  describe('triggerResize signature compatibility', () => {
+    it('should work with no arguments (backward compatible)', () => {
+      const { result } = renderHook(() => useResizeCoordinator());
+      const mockFitAddon = createMockFitAddon();
+
+      act(() => {
+        result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
+      });
+
+      mockFitAddon.fit.mockClear();
+
+      // No args — should still work as before
+      act(() => {
+        result.current.triggerResize();
+        vi.runAllTimers();
+      });
+
+      expect(mockFitAddon.fit).toHaveBeenCalled();
+    });
+
+    it('should work with only immediate=true (backward compatible)', () => {
+      const { result } = renderHook(() => useResizeCoordinator());
+      const mockFitAddon = createMockFitAddon();
+
+      act(() => {
+        result.current.register({ id: 'term-1', fitAddon: mockFitAddon });
+      });
+
+      mockFitAddon.fit.mockClear();
+
+      act(() => {
+        result.current.triggerResize(true);
+        vi.runAllTimers();
+      });
+
+      expect(mockFitAddon.fit).toHaveBeenCalled();
+    });
   });
 });

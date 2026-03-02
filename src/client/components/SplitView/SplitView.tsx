@@ -46,7 +46,7 @@ interface SplitViewProps {
   onWindowClose: (id: string) => void;
   onWindowMinimize: (id: string) => void;
   onWindowRestore: (id: string) => void;
-  onLayoutChange: (id: string, layout: WindowLayout, isDragging?: boolean) => void;
+  onLayoutChange: (id: string, layout: WindowLayout, isDragging?: boolean, skipResize?: boolean) => void;
   onAddWindow: () => void;
   onWindowRename?: (id: string, name: string) => void;
   onLayoutsChange?: (layouts: WindowLayout[]) => void;
@@ -120,7 +120,39 @@ export default function SplitView({
   // Suppress CSS transitions during resize completion so fitAddon.fit() sees final dimensions instantly.
   // Without this, the 200ms transition-all animation on window containers causes fitAddon.fit() to
   // measure intermediate sizes, resulting in dark gaps when expanding terminals.
-  const [suppressTransitions, setSuppressTransitions] = useState(false);
+  // FIX Bug 1: Use ref + direct DOM classList manipulation instead of React useState.
+  // React 18 batches state updates, so useState doesn't take effect before RAF fires.
+  // Direct classList manipulation is synchronous — the class is removed/added instantly.
+  const suppressTransitionsRef = useRef(false);
+  const windowContainerRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const TRANSITION_CLASS = 'transition-all';
+  const DURATION_CLASS = 'duration-200';
+  const SAFETY_TIMEOUT_MS = 500;
+
+  const setTransitionsSuppressed = useCallback((suppress: boolean) => {
+    suppressTransitionsRef.current = suppress;
+    windowContainerRefs.current.forEach((el) => {
+      if (suppress) {
+        el.classList.remove(TRANSITION_CLASS, DURATION_CLASS);
+      } else {
+        el.classList.add(TRANSITION_CLASS, DURATION_CLASS);
+      }
+    });
+  }, []);
+
+  const windowContainerRefCallback = useCallback((windowId: string) => (el: HTMLElement | null) => {
+    if (el) {
+      windowContainerRefs.current.set(windowId, el);
+      // Enforce current suppression state on newly registered elements
+      if (suppressTransitionsRef.current) {
+        el.classList.remove(TRANSITION_CLASS, DURATION_CLASS);
+      } else {
+        el.classList.add(TRANSITION_CLASS, DURATION_CLASS);
+      }
+    } else {
+      windowContainerRefs.current.delete(windowId);
+    }
+  }, []);
 
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -700,10 +732,9 @@ export default function SplitView({
     };
 
     const handleMouseUp = () => {
-      // Suppress CSS transitions so containers jump to final size instantly.
-      // This prevents fitAddon.fit() from measuring intermediate animated dimensions,
-      // which causes dark gaps when expanding terminals.
-      setSuppressTransitions(true);
+      // FIX Bug 1: Suppress CSS transitions via direct DOM manipulation (synchronous).
+      // React useState is batched and wouldn't take effect before RAF fires.
+      setTransitionsSuppressed(true);
 
       // Apply divider preview to actual layouts on mouseup
       if (activeDragZone && dividerPreview) {
@@ -717,9 +748,9 @@ export default function SplitView({
           ? calculateVerticalDividerLayouts(snappedPosition, win1Id, win2Id, visibleWindows)
           : calculateHorizontalDividerLayouts(snappedPosition, win1Id, win2Id, visibleWindows);
 
-        // Apply all layout changes (isDragging=false to allow resize)
+        // FIX Bug 2: Pass skipResize=true — SplitView handles resize itself below
         layouts.forEach((layout, windowId) => {
-          onLayoutChange(windowId, layout, false);
+          onLayoutChange(windowId, layout, false, true);
         });
 
         // Clear preview state
@@ -733,8 +764,9 @@ export default function SplitView({
       if (activeDropZone && dragging) {
         const targetWindow = visibleWindows.find(w => w.id === activeDropZone.targetId);
         if (targetWindow) {
-          onLayoutChange(activeDropZone.targetId, activeDropZone.preview.target);
-          onLayoutChange(dragging.id, activeDropZone.preview.dragged);
+          // FIX Bug 2: skipResize=true
+          onLayoutChange(activeDropZone.targetId, activeDropZone.preview.target, false, true);
+          onLayoutChange(dragging.id, activeDropZone.preview.dragged, false, true);
         }
       }
 
@@ -742,12 +774,13 @@ export default function SplitView({
         dragging.flushStartLayouts.forEach((_, windowId) => {
           const currentWindow = visibleWindows.find(w => w.id === windowId);
           if (currentWindow) {
+            // FIX Bug 2: skipResize=true
             onLayoutChange(windowId, {
               x: currentWindow.x,
               y: currentWindow.y,
               width: currentWindow.width,
               height: currentWindow.height,
-            }, false);
+            }, false, true);
           }
         });
       }
@@ -768,13 +801,17 @@ export default function SplitView({
       setActiveDropZone(null);
       setFlushGroup(new Set());
 
-      // Immediate resize — no delay needed since transitions are suppressed.
-      // Container is already at final size, so fitAddon.fit() gets correct dimensions.
+      // FIX Bug 4: Use onComplete callback to re-enable transitions AFTER resize finishes.
+      // This ensures fitAddon.fit() + canvas verify complete before transitions animate again.
+      const safetyTimer = setTimeout(() => {
+        // Safety fallback: re-enable transitions even if onComplete never fires
+        setTransitionsSuppressed(false);
+      }, SAFETY_TIMEOUT_MS);
+
       requestAnimationFrame(() => {
-        resizeCoordinator?.triggerResize(true); // immediate=true, skip debounce
-        // Re-enable transitions after resize completes
-        requestAnimationFrame(() => {
-          setSuppressTransitions(false);
+        resizeCoordinator?.triggerResize(true, () => {
+          clearTimeout(safetyTimer);
+          setTransitionsSuppressed(false);
         });
       });
     };
@@ -994,7 +1031,8 @@ export default function SplitView({
         return (
         <div
           key={window.id}
-          className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden ${suppressTransitions ? '' : 'transition-all duration-200'} ${
+          ref={windowContainerRefCallback(window.id)}
+          className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden transition-all duration-200 ${
             isZoomed
               ? 'border-[#00d4ff]/60 shadow-[0_0_32px_rgba(0,212,255,0.15)] ring-1 ring-[#00d4ff]/20'
               : dropTarget === window.id

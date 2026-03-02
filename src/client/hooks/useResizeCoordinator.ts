@@ -50,6 +50,32 @@ const TRANSITION_WAIT_TIMEOUT_MS = 300;
 const CANVAS_VERIFY_MAX_RETRIES = 3; // Increased from 2 to give canvas one more sync chance post-resize
 const CANVAS_VERIFY_DELAYS = [16, 48, 100]; // Final 100ms delay for slow layout propagation
 const RESIZE_OBSERVER_FALLBACK_MS = 150; // Fallback if ResizeObserver doesn't fire
+const TRANSITION_PROPERTIES = new Set(['all', 'width', 'height', 'left', 'top', 'transform']);
+
+/**
+ * Walk up the DOM tree to find an ancestor with an active CSS transition on layout properties.
+ * CSS transition-duration is NOT inherited, so we must check each ancestor explicitly.
+ * Returns the element with the transition, or null if none found.
+ */
+function findTransitionAncestor(element: HTMLElement, maxDepth = 5): HTMLElement | null {
+  let current: HTMLElement | null = element;
+  for (let depth = 0; depth < maxDepth && current; depth++) {
+    const style = getComputedStyle(current);
+    const durations = style.transitionDuration?.split(',').map(s => s.trim()) || [];
+    const properties = style.transitionProperty?.split(',').map(s => s.trim()) || [];
+
+    for (let i = 0; i < properties.length; i++) {
+      const prop = properties[i];
+      const dur = durations[i] || durations[0] || '0s';
+      if (TRANSITION_PROPERTIES.has(prop) && dur !== '0s' && dur !== 'none') {
+        return current;
+      }
+    }
+
+    current = current.parentElement;
+  }
+  return null;
+}
 
 /**
  * Verify WebGL canvas dimensions with retry and exponential backoff.
@@ -168,11 +194,11 @@ export function useResizeCoordinator() {
     }
   }, []);
 
-  const performAtomicResize = useCallback((target: ResizeTarget, immediate = false) => {
+  const performAtomicResize = useCallback((target: ResizeTarget, immediate = false): Promise<void> => {
     // FIX RS-2: Skip resize if terminal is recovering from WebGL context loss
     if (target.isRecovering?.()) {
       console.debug(`[ResizeCoordinator] Skipping resize for ${target.id} - recovery in progress`);
-      return;
+      return Promise.resolve();
     }
 
     const executeResize = async () => {
@@ -232,49 +258,52 @@ export function useResizeCoordinator() {
       document.querySelector(`[data-terminal-id="${target.id}"]`) as HTMLElement | null;
 
     if (!immediate && termElement) {
-      // Check for active CSS transitions
-      const style = getComputedStyle(termElement);
-      const duration = style.transitionDuration;
-      const hasTransition = duration && duration !== '0s' && duration !== 'none';
+      // FIX Bug 3: Walk up DOM to find ancestor with active transition (not just termElement)
+      const transitionEl = findTransitionAncestor(termElement);
 
-      if (hasTransition) {
+      if (transitionEl) {
         // Wait for transition to end, then resize
-        let resolved = false;
-        const done = () => {
-          if (resolved) return;
-          resolved = true;
-          termElement.removeEventListener('transitionend', done);
-          requestAnimationFrame(() => executeResize());
-        };
-        termElement.addEventListener('transitionend', done, { once: true });
-        setTimeout(done, TRANSITION_WAIT_TIMEOUT_MS);
-        return;
+        return new Promise<void>((resolve) => {
+          let resolved = false;
+          const done = () => {
+            if (resolved) return;
+            resolved = true;
+            transitionEl.removeEventListener('transitionend', done);
+            requestAnimationFrame(() => { executeResize().then(resolve, resolve); });
+          };
+          transitionEl.addEventListener('transitionend', done, { once: true });
+          setTimeout(done, TRANSITION_WAIT_TIMEOUT_MS);
+        });
       }
     }
 
     // No transitions or immediate mode: use ResizeObserver to wait for final layout
     if (!immediate && termElement) {
-      let fired = false;
-      const observer = new ResizeObserver(() => {
-        if (fired) return;
-        fired = true;
-        observer.disconnect();
-        clearTimeout(fallbackTimer);
-        requestAnimationFrame(() => executeResize());
+      return new Promise<void>((resolve) => {
+        let fired = false;
+        const observer = new ResizeObserver(() => {
+          if (fired) return;
+          fired = true;
+          observer.disconnect();
+          clearTimeout(fallbackTimer);
+          requestAnimationFrame(() => { executeResize().then(resolve, resolve); });
+        });
+        observer.observe(termElement);
+        // Fallback timeout in case element size didn't change (ResizeObserver won't fire)
+        const fallbackTimer = setTimeout(() => {
+          if (fired) return;
+          fired = true;
+          observer.disconnect();
+          requestAnimationFrame(() => { executeResize().then(resolve, resolve); });
+        }, RESIZE_OBSERVER_FALLBACK_MS);
       });
-      observer.observe(termElement);
-      // Fallback timeout in case element size didn't change (ResizeObserver won't fire)
-      const fallbackTimer = setTimeout(() => {
-        if (fired) return;
-        fired = true;
-        observer.disconnect();
-        requestAnimationFrame(() => executeResize());
-      }, RESIZE_OBSERVER_FALLBACK_MS);
     } else {
       // Immediate mode: use double-RAF for CSS paint
-      requestAnimationFrame(() => {
+      return new Promise<void>((resolve) => {
         requestAnimationFrame(() => {
-          executeResize();
+          requestAnimationFrame(() => {
+            executeResize().then(resolve, resolve);
+          });
         });
       });
     }
@@ -306,32 +335,39 @@ export function useResizeCoordinator() {
    * Trigger resize for all registered targets.
    * @param immediate - Skip debounce (used for initial setup, post-recovery).
    *                    When immediate, also skips CSS transition waiting.
+   * @param onComplete - Called after all resize operations finish (including async canvas verify).
+   *                     Use this to safely re-enable transitions after resize completes.
    */
-  const triggerResize = useCallback((immediate = false) => {
+  const triggerResize = useCallback((immediate = false, onComplete?: () => void) => {
     if (animationStateRef.current.isAnimating) {
       animationStateRef.current.pendingResize = true;
+      onComplete?.();
       return;
     }
 
     const doResizeAll = () => {
       if (animationStateRef.current.isAnimating) {
         animationStateRef.current.pendingResize = true;
+        onComplete?.();
         return;
       }
 
       if (isResizingRef.current) {
+        onComplete?.();
         return;
       }
       isResizingRef.current = true;
 
       requestAnimationFrame(() => {
         const targets = Array.from(targetsRef.current.values());
-        for (const target of targets) {
-          performAtomicResize(target, immediate);
-        }
-        // Release lock after next frame to prevent concurrent resize cascades
-        requestAnimationFrame(() => {
+        const promises = targets.map(target => performAtomicResize(target, immediate));
+        // FIX Bug 4: Wait for ALL resize promises (including async canvas verify) before releasing lock
+        Promise.all(promises).then(() => {
           isResizingRef.current = false;
+          onComplete?.();
+        }, () => {
+          isResizingRef.current = false;
+          onComplete?.();
         });
       });
     };

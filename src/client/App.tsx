@@ -900,11 +900,16 @@ export default function App() {
 
   const fitTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
-  const handleLayoutChange = useCallback((id: string, layout: { x: number; y: number; width: number; height: number }, isDragging = false) => {
+  const handleLayoutChange = useCallback((id: string, layout: { x: number; y: number; width: number; height: number }, isDragging = false, skipResize = false) => {
     setWindows(prev => prev.map(w => w.id === id ? { ...w, ...layout } : w));
     sendMessage({ type: 'window:layout', windowId: id, ...layout });
 
     if (isDragging) {
+      return;
+    }
+
+    // FIX Bug 2: SplitView handles its own resize on mouseup, skip the delayed one
+    if (skipResize) {
       return;
     }
 
