@@ -13,6 +13,7 @@ interface TodoPanelProps {
   sessions: SessionTodos[];
   isLoading?: boolean;
   onWidthChange?: (width: number) => void;
+  isMobile?: boolean;
 }
 
 function TodoPanelComponent({
@@ -21,6 +22,7 @@ function TodoPanelComponent({
   sessions,
   isLoading = false,
   onWidthChange,
+  isMobile = false,
 }: TodoPanelProps) {
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
@@ -110,6 +112,123 @@ function TodoPanelComponent({
     setHoveredSession(id);
   }, []);
 
+  // Shared expanded content renderer
+  const expandedContent = (
+    <div className="flex-1 overflow-hidden flex flex-col">
+      {isLoading ? (
+        <div className="flex items-center justify-center h-full py-8">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 border-2 border-[#00d4ff]/30 border-t-[#00d4ff] rounded-full animate-spin" />
+            <span className="text-[11px] text-[#71717a]">Loading...</span>
+          </div>
+        </div>
+      ) : !hasTodos ? (
+        <div className="flex flex-col items-center justify-center h-full py-8 px-4">
+          <div className="w-10 h-10 rounded-full bg-white/[0.02] flex items-center justify-center mb-3">
+            <svg
+              className="w-5 h-5 text-[#4a4a52]"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          </div>
+          <span className="text-[11px] text-[#71717a] text-center">
+            No active tasks
+          </span>
+          <span className="text-[10px] text-[#4a4a52] text-center mt-1">
+            Tasks will appear when Claude is working
+          </span>
+        </div>
+      ) : (
+        <div
+          className="
+            flex-1 overflow-y-auto py-1
+            scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/[0.08]
+            hover:scrollbar-thumb-white/[0.12]
+          "
+          style={{
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(255, 255, 255, 0.08) transparent',
+          }}
+        >
+          {sessions.map((session, index) => (
+            <TodoSection
+              key={session.sessionId}
+              sessionId={session.sessionId}
+              sessionName={session.sessionName}
+              todos={session.todos}
+              isActive={index === 0}
+              defaultExpanded={index === 0}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // Shared header renderer
+  const headerContent = (
+    <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/[0.04]">
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-1 h-4 bg-gradient-to-b from-[#00d4ff] to-[#00d4ff]/20 rounded-full flex-shrink-0" />
+        <span className="text-[12px] font-semibold text-[#e0e0e8] uppercase tracking-wider truncate">
+          Tasks
+        </span>
+        {totalNotCompleted > 0 && (
+          <span
+            className={`
+              text-[9px] font-bold px-1.5 py-0.5 rounded-full
+              ${
+                totalInProgress > 0
+                  ? 'bg-[#00d4ff]/15 text-[#00d4ff]'
+                  : 'bg-white/[0.06] text-[#a1a1aa]'
+              }
+            `}
+          >
+            {totalNotCompleted}
+          </span>
+        )}
+      </div>
+      <button
+        onClick={onToggle}
+        className="
+          flex-shrink-0 p-1.5 rounded-md
+          text-[#71717a] hover:text-[#a1a1aa]
+          hover:bg-white/[0.04]
+          transition-colors duration-150
+        "
+        title="Close panel"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+
+  // Mobile: overlay drawer
+  if (isMobile) {
+    if (!expanded) return null;
+    const drawerWidth = Math.min(panelWidth, (typeof window !== 'undefined' ? window.innerWidth : 375) - 48);
+    return (
+      <>
+        <div className="todo-drawer-backdrop" onClick={onToggle} />
+        <div className="todo-drawer" style={{ width: `${drawerWidth}px` }}>
+          {headerContent}
+          {expandedContent}
+        </div>
+      </>
+    );
+  }
+
+  // Desktop: push layout with collapsed bar
   return (
     <div
       className={`
@@ -140,7 +259,6 @@ function TodoPanelComponent({
               <span className="text-[12px] font-semibold text-[#e0e0e8] uppercase tracking-wider truncate">
                 Tasks
               </span>
-              {/* Total count badge */}
               {totalNotCompleted > 0 && (
                 <span
                   className={`
@@ -202,7 +320,6 @@ function TodoPanelComponent({
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
-            {/* Badge for pending count when collapsed */}
             {totalNotCompleted > 0 && (
               <span
                 className={`
@@ -226,65 +343,7 @@ function TodoPanelComponent({
       </div>
 
       {/* Expanded content */}
-      {expanded && (
-        <div className="flex-1 overflow-hidden flex flex-col">
-          {isLoading ? (
-            <div className="flex items-center justify-center h-full py-8">
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-[#00d4ff]/30 border-t-[#00d4ff] rounded-full animate-spin" />
-                <span className="text-[11px] text-[#71717a]">Loading...</span>
-              </div>
-            </div>
-          ) : !hasTodos ? (
-            <div className="flex flex-col items-center justify-center h-full py-8 px-4">
-              <div className="w-10 h-10 rounded-full bg-white/[0.02] flex items-center justify-center mb-3">
-                <svg
-                  className="w-5 h-5 text-[#4a4a52]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </div>
-              <span className="text-[11px] text-[#71717a] text-center">
-                No active tasks
-              </span>
-              <span className="text-[10px] text-[#4a4a52] text-center mt-1">
-                Tasks will appear when Claude is working
-              </span>
-            </div>
-          ) : (
-            <div
-              className="
-                flex-1 overflow-y-auto py-1
-                scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/[0.08]
-                hover:scrollbar-thumb-white/[0.12]
-              "
-              style={{
-                scrollbarWidth: 'thin',
-                scrollbarColor: 'rgba(255, 255, 255, 0.08) transparent',
-              }}
-            >
-              {sessions.map((session, index) => (
-                <TodoSection
-                  key={session.sessionId}
-                  sessionId={session.sessionId}
-                  sessionName={session.sessionName}
-                  todos={session.todos}
-                  isActive={index === 0}
-                  defaultExpanded={index === 0}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {expanded && expandedContent}
 
       {/* Collapsed state - vertical progress bars per session */}
       {!expanded && hasTodos && (
@@ -296,7 +355,6 @@ function TodoPanelComponent({
               onMouseEnter={() => handleSessionHover(stat.sessionId)}
               onMouseLeave={() => handleSessionHover(null)}
             >
-              {/* Vertical progress bar */}
               <div className="w-2.5 h-14 rounded-full bg-white/[0.04] overflow-hidden flex flex-col-reverse cursor-pointer">
                 {stat.completedPct > 0 && (
                   <div
@@ -318,7 +376,6 @@ function TodoPanelComponent({
                 )}
               </div>
 
-              {/* Tooltip on hover */}
               {hoveredSession === stat.sessionId && (
                 <div className="absolute left-full ml-2.5 top-0 z-[9999] px-3 py-2 bg-[#0a0a0f] border border-white/[0.08] rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.6)] whitespace-nowrap pointer-events-none">
                   <div className="text-[11px] font-medium text-[#e0e0e8] mb-1.5">
@@ -344,7 +401,6 @@ function TodoPanelComponent({
                       </span>
                     )}
                   </div>
-                  {/* Mini progress bar in tooltip */}
                   <div className="mt-1.5 w-full h-1 rounded-full bg-white/[0.04] overflow-hidden flex">
                     {stat.completedPct > 0 && (
                       <div
@@ -372,7 +428,7 @@ function TodoPanelComponent({
         </div>
       )}
 
-      {/* Drag handle (only when expanded) */}
+      {/* Drag handle (only when expanded, desktop only) */}
       {expanded && (
         <div
           className={`

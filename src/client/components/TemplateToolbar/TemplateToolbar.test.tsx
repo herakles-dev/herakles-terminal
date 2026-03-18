@@ -4,16 +4,12 @@ import { TemplateToolbar } from './TemplateToolbar';
 
 // Mock fetch for template loading
 const mockTemplates = [
-  { id: 't1', name: 'New Project', category: 'v9-start', command: '/spec', isBuiltIn: true },
-  { id: 't2', name: 'Squad', category: 'v9-formation', command: '/team squad', isBuiltIn: true },
-  { id: 't3', name: 'High Effort', category: 'v9-effort', command: '/effort high', isBuiltIn: true },
-  { id: 't4', name: 'Full Auto', category: 'v9-autonomy', command: '/autonomy 5', isBuiltIn: true },
-  { id: 't5', name: 'Deploy', category: 'v9-deploy', command: '/deploy', isBuiltIn: true },
-  { id: 't6', name: 'Scaffold', category: 'v9-scripts', command: '/scaffold', isBuiltIn: true },
-  { id: 't7', name: 'Quick Ref', category: 'v9-tips', command: '/help', isBuiltIn: true },
-  { id: 't8', name: 'Opus', category: 'cc-model', command: '/model opus', isBuiltIn: true },
-  { id: 't9', name: 'Meta Prompt', category: 'claude-meta', command: '/lead', isBuiltIn: true },
-  { id: 't10', name: 'With Vars', category: 'v9-start', command: 'hello {{name}}', isBuiltIn: true, variables: [{ name: 'name', default: 'world' }] },
+  { id: 't1', name: 'Start V11 Session', category: 'orchestrate', command: '/v11', isBuiltIn: true },
+  { id: 't2', name: 'Session Status', category: 'observe', command: '/status', isBuiltIn: true },
+  { id: 't3', name: 'Run Tests', category: 'develop', command: '/test', isBuiltIn: true },
+  { id: 't4', name: 'Deploy Service', category: 'ship', command: '/deploy svc', isBuiltIn: true },
+  { id: 't5', name: 'Switch to Opus', category: 'session', command: '/model opus', isBuiltIn: true },
+  { id: 't6', name: 'With Vars', category: 'orchestrate', command: 'Build {{feature}}.', isBuiltIn: true, variables: [{ name: 'feature', required: true }] },
 ];
 
 function setupFetchMock(templates = mockTemplates) {
@@ -31,20 +27,15 @@ describe('TemplateToolbar', () => {
     setupFetchMock();
   });
 
-  it('renders 9 category icon buttons after loading', async () => {
+  it('renders 5 category icon buttons after loading', async () => {
     render(<TemplateToolbar onExecuteCommand={onExecuteCommand} />);
 
     await waitFor(() => {
-      // Each category becomes a button with its label as title
-      expect(screen.getByTitle('Project Start')).toBeInTheDocument();
-      expect(screen.getByTitle('Formations')).toBeInTheDocument();
-      expect(screen.getByTitle('Effort & Thinking')).toBeInTheDocument();
-      expect(screen.getByTitle('Autonomy')).toBeInTheDocument();
-      expect(screen.getByTitle('Deploy & Ops')).toBeInTheDocument();
-      expect(screen.getByTitle('CLI Scripts')).toBeInTheDocument();
-      expect(screen.getByTitle('Quick Ref')).toBeInTheDocument();
-      expect(screen.getByTitle('Models')).toBeInTheDocument();
-      expect(screen.getByTitle('Meta-Prompts')).toBeInTheDocument();
+      expect(screen.getByTitle('Orchestrate')).toBeInTheDocument();
+      expect(screen.getByTitle('Observe')).toBeInTheDocument();
+      expect(screen.getByTitle('Develop')).toBeInTheDocument();
+      expect(screen.getByTitle('Ship')).toBeInTheDocument();
+      expect(screen.getByTitle('Session')).toBeInTheDocument();
     });
   });
 
@@ -78,9 +69,7 @@ describe('TemplateToolbar', () => {
     });
 
     // Should render nothing since no categories match
-    // The component returns null for empty activeCategories
     await waitFor(() => {
-      // Only dividers and no buttons means effectively empty
       const buttons = container.querySelectorAll('button[title]');
       expect(buttons.length).toBe(0);
     });
@@ -129,8 +118,17 @@ describe('TemplateToolbar', () => {
 
     // Should show category labels in mobile dropdown
     await waitFor(() => {
-      expect(screen.getByText('Project Start')).toBeInTheDocument();
-      expect(screen.getByText('Formations')).toBeInTheDocument();
+      expect(screen.getByText('Orchestrate')).toBeInTheDocument();
+      expect(screen.getByText('Observe')).toBeInTheDocument();
+    });
+  });
+
+  it('applies highlight styling to Orchestrate button', async () => {
+    render(<TemplateToolbar onExecuteCommand={onExecuteCommand} />);
+
+    await waitFor(() => {
+      const orchestrateBtn = screen.getByTitle('Orchestrate');
+      expect(orchestrateBtn.className).toContain('text-[#00d4ff]');
     });
   });
 

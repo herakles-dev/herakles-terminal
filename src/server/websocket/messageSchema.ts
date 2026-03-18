@@ -33,7 +33,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('window:create'),
     sessionId: uuidSchema,
-    windowType: z.enum(['terminal', 'media']).optional(),
+    windowType: z.enum(['terminal', 'media', 'agent']).optional(),
   }),
   z.object({
     type: z.literal('window:close'),
@@ -128,6 +128,12 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('artifact:unsubscribe'),
+  }),
+  z.object({
+    type: z.literal('team:subscribe'),
+  }),
+  z.object({
+    type: z.literal('team:unsubscribe'),
   }),
 ]);
 

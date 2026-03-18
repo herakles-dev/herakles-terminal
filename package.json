@@ -1,6 +1,6 @@
 {
   "name": "herakles-terminal",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Resilient, mobile-first web terminal for Claude Code power users",
   "private": true,
   "type": "module",

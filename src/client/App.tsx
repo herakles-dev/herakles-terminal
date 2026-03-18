@@ -42,6 +42,8 @@ import { useResizeCoordinator } from './hooks/useResizeCoordinator';
 import { useCanvasArtifacts } from './hooks/useCanvasArtifacts';
 import { useClipboardUpload } from './hooks/useClipboardUpload';
 import { useHealthActions } from './hooks/useHealthActions';
+import { useTeamCockpit } from './hooks/useTeamCockpit';
+import { TeamBar } from './components/TeamBar/TeamBar';
 import { useToast } from './components/Toast/Toast';
 import { uploadService } from './services/uploadService';
 import { OutputPipelineManager, filterThinkingOutput } from './services/OutputPipelineManager';
@@ -50,12 +52,14 @@ import { WebGLHealthMonitor, exposeMetricsToWindow } from './services/WebGLHealt
 import { ResizeCoordinatorContext } from './contexts/ResizeCoordinatorContext';
 
 
-import { TERMINAL_DEFAULTS } from '@shared/constants';
+import { TERMINAL_DEFAULTS, USE_GRID_LAYOUT } from '@shared/constants';
+import { WindowGrid, type GridWindowConfig } from './components/WindowGrid';
+import { useGridResize } from './hooks/useGridResize';
 
 interface WindowConfig {
   id: string;
   name: string;
-  type: 'terminal' | 'media';
+  type: 'terminal' | 'media' | 'agent';
   x: number;
   y: number;
   width: number;
@@ -118,7 +122,7 @@ function calculateTerminalGridLayouts(count: number): WindowLayout[] {
 }
 
 // Main layout calculator: handles mixed terminal + media windows
-function calculateWindowLayouts(windows: Array<{ type?: 'terminal' | 'media' }>): WindowLayout[] {
+function calculateWindowLayouts(windows: Array<{ type?: 'terminal' | 'media' | 'agent' }>): WindowLayout[] {
   // Separate windows by type
   const terminalIndices: number[] = [];
   const mediaIndices: number[] = [];
@@ -175,6 +179,7 @@ export default function App() {
   const toast = useToast();
   const { isMobile } = useMobileDetect();
   const resizeCoordinator = useResizeCoordinator();
+  const gridResize = useGridResize();
   const {
     artifacts: canvasArtifacts,
     activeArtifactId,
@@ -190,7 +195,10 @@ export default function App() {
     refetchMissedArtifacts,
   } = useCanvasArtifacts();
   const [showLightning, setShowLightning] = useState(true);
-  const [todoPanelExpanded, setTodoPanelExpanded] = useState(true);
+  const [todoPanelExpanded, setTodoPanelExpanded] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return !(window.innerWidth < 768 || /android|iphone|ipad|ipod/i.test(navigator.userAgent));
+  });
   const [todoSessions, setTodoSessions] = useState<SessionTodos[]>([]);
   const [todosLoading, setTodosLoading] = useState(false);
 
@@ -210,12 +218,12 @@ export default function App() {
   }, [todoSessions]);
   const [musicPlayerVisible, setMusicPlayerVisible] = useState(false);
   const [musicPlayerState, setMusicPlayerState] = useState<Partial<MusicPlayerState>>({});
-  const [musicDockState, setMusicDockState] = useState<MusicDockState>(DEFAULT_DOCK_STATE);
+  const [_musicDockState, setMusicDockState] = useState<MusicDockState>(DEFAULT_DOCK_STATE);
   const [starredVideos, setStarredVideos] = useState<StarredVideo[]>([]);
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [contextUsage, setContextUsage] = useState<Map<string, ContextUsage>>(new Map());
   const [todoPanelWidth, setTodoPanelWidth] = useState(280);
-  const [artifactHistory, setArtifactHistory] = useState<ArtifactMetadata[]>([]);
+  const [_artifactHistory, setArtifactHistory] = useState<ArtifactMetadata[]>([]);
   const [canvasViewerOpen, setCanvasViewerOpen] = useState(false);
   const [activeArtifactIndex, setActiveArtifactIndex] = useState(0);
   const [youtubeButtonPos, setYoutubeButtonPos] = useState({ x: 16, y: window.innerHeight - 80 });
@@ -343,17 +351,25 @@ export default function App() {
   const terminalRefs = useRef<Map<string, TerminalCoreHandle>>(new Map());
   const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
   const sendMessageRef = useRef<((msg: object) => void) | null>(null);
+  const teamCockpitRef = useRef<((msg: any) => void) | null>(null);
+  const activeTeamRef = useRef<import('@shared/teamProtocol').TeamInfo | null>(null);
   const addArtifactRef = useRef(addArtifact);
   addArtifactRef.current = addArtifact;
   const outputPipelineRef = useRef<OutputPipelineManager | null>(null);
   const healthMonitorRef = useRef<WebGLHealthMonitor | null>(null);
   const pendingRestoreRef = useRef<Map<string, string>>(new Map());
   const selectionRefs = useRef<Map<string, string>>(new Map()); // Track selection per window for WebGL
+  const selectionCleanupTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map()); // FIX F: Debounced cleanup
   const restoreNeededAfterRecoveryRef = useRef<Set<string>>(new Set()); // Windows that need restore after WebGL recovery
   const recoveryTerminalSizeRef = useRef<Map<string, { cols: number; rows: number }>>(new Map()); // FIX RS-2: Track terminal size during recovery
+  const resizeSeqRef = useRef<Map<string, number>>(new Map()); // RC-3: Monotonic seq per window for resize ack correlation
+  // RC-4: Two-flag gate — output released only when BOTH server ack and canvas verify complete
+  const resizeGateRef = useRef<Map<string, { serverAcked: boolean; canvasVerified: boolean; safetyTimer: ReturnType<typeof setTimeout> | null }>>(new Map());
   const contextMenuHandlersRef = useRef<Map<string, { element: HTMLElement; handler: (e: MouseEvent) => void }>>(new Map());
   const resizeCoordinatorRef = useRef(resizeCoordinator);
   resizeCoordinatorRef.current = resizeCoordinator;
+  const gridResizeRef = useRef(gridResize);
+  gridResizeRef.current = gridResize;
 
   // Ref for windows array to avoid handleStateChange instability (CF-B fix)
   const windowsRef = useRef(windows);
@@ -396,8 +412,13 @@ export default function App() {
     // Clean up pending restore content
     pendingRestoreRef.current.delete(windowId);
 
-    // Clean up selection tracking
+    // Clean up selection tracking + debounced timer
     selectionRefs.current.delete(windowId);
+    const selectionTimer = selectionCleanupTimers.current.get(windowId);
+    if (selectionTimer) {
+      clearTimeout(selectionTimer);
+      selectionCleanupTimers.current.delete(windowId);
+    }
 
     // Clean up recovery tracking
     restoreNeededAfterRecoveryRef.current.delete(windowId);
@@ -513,8 +534,9 @@ export default function App() {
           const filteredData = filterThinkingOutput(msg.data);
           // Single RAF (reduced from 3 nested RAFs)
           requestAnimationFrame(() => {
-            terminal.reset();
-            terminal.write(filteredData, () => {
+            // FIX A: Use ANSI clear screen + cursor home instead of terminal.reset()
+            // reset() destroys scrollback buffer; ANSI \x1b[2J\x1b[H clears viewport only
+            terminal.write('\x1b[2J\x1b[H' + filteredData, () => {
               terminal.scrollToBottom();
               // Step 3: Exit restore mode in write callback
               outputPipelineRef.current?.setRestoreInProgress(msg.windowId, false);
@@ -559,14 +581,45 @@ export default function App() {
 
       case 'window:resized': {
         const { windowId, cols, rows } = msg;
-        resizeCoordinatorRef.current.confirmResize(windowId, cols, rows);
-        outputPipelineRef.current?.setResizePending(windowId, false);
+        if (!USE_GRID_LAYOUT) {
+          resizeCoordinatorRef.current.confirmResize(windowId, cols, rows);
+          // RC-1: Delay clearing resize-pending by 80ms to match server drain delay.
+          // Lets tmux SIGWINCH re-render output arrive and get filtered before buffer release.
+          setTimeout(() => {
+            // Guard: skip if window was destroyed during the delay
+            if (outputPipelineRef.current?.isResizePending(windowId)) {
+              outputPipelineRef.current.setResizePending(windowId, false);
+            }
+          }, 80);
+          break;
+        }
+        // RC-6: Sync tracked dimensions from server-confirmed values
+        gridResizeRef.current.confirmDimensions(windowId, cols, rows);
+        // RC-3: Only process if this ack matches the latest resize we sent.
+        const ackSeq = (msg as Record<string, unknown>).seq as number | undefined;
+        const latestSeq = resizeSeqRef.current.get(windowId);
+        if (ackSeq !== undefined && latestSeq !== undefined && ackSeq < latestSeq) {
+          break; // Stale ack — a newer resize is in flight
+        }
+        // RC-4: Two-flag gate — mark server ack received, release only if canvas also verified
+        const gate = resizeGateRef.current.get(windowId);
+        if (gate) {
+          gate.serverAcked = true;
+          if (gate.canvasVerified) {
+            if (gate.safetyTimer) clearTimeout(gate.safetyTimer);
+            resizeGateRef.current.delete(windowId);
+            outputPipelineRef.current?.setResizePending(windowId, false);
+          }
+        } else {
+          // No gate (race or v1 path) — release immediately
+          outputPipelineRef.current?.setResizePending(windowId, false);
+        }
         break;
       }
 
       case 'window:output': {
         const windowId = msg.windowId;
-        if (resizeCoordinatorRef.current.isResizePending(windowId)) {
+        if (!USE_GRID_LAYOUT && resizeCoordinatorRef.current.isResizePending(windowId)) {
           outputPipelineRef.current?.setResizePending(windowId, true);
         }
         outputPipelineRef.current?.enqueue(windowId, msg.data, msg.seq);
@@ -650,6 +703,14 @@ export default function App() {
         if (msg.artifacts) {
           setArtifactHistory(msg.artifacts);
         }
+        break;
+
+      case 'team:sync':
+      case 'team:member:update':
+      case 'team:detected':
+      case 'team:dissolved':
+      case 'team:log':
+        teamCockpitRef.current?.(msg);
         break;
 
       case 'error':
@@ -736,6 +797,14 @@ export default function App() {
   useEffect(() => {
     sendMessageRef.current = wsSend;
   }, [wsSend]);
+
+  // Team cockpit integration
+  const { activeTeam, cockpitEnabled, handleTeamMessage, dismissed, setDismissed, logEvents, expandedAgent, setExpandedAgent } = useTeamCockpit({
+    sendMessage: wsSend,
+    isConnected: connectionState === 'connected',
+  });
+  teamCockpitRef.current = handleTeamMessage;
+  activeTeamRef.current = activeTeam;
 
   // Track if we're subscribed to todo/artifact/music updates
   const todoSubscribedRef = useRef(false);
@@ -826,14 +895,16 @@ export default function App() {
     };
   }, [applyHealthActions]);
 
+  // FIX G: Clean up music sync timeout on unmount to prevent leaked fetch after disposal
+  useEffect(() => {
+    return () => {
+      if (musicSyncTimeoutRef.current) clearTimeout(musicSyncTimeoutRef.current);
+    };
+  }, []);
+
   const sendMessage = useCallback((message: object) => {
     sendMessageRef.current?.(message);
   }, []);
-
-  const handleDockUpdate = useCallback((state: MusicDockState) => {
-    setMusicDockState(state);
-    sendMessage({ type: 'music:dock:update', state });
-  }, [sendMessage]);
 
   const handleYoutubeButtonDragStart = useCallback((e: React.MouseEvent) => {
     setIsDraggingYoutubeBtn(true);
@@ -888,22 +959,32 @@ export default function App() {
     setActiveWindowId(id);
   }, []);
 
-  // Trigger resize for all terminals when panel layout changes (after 220ms CSS transition)
+  // Trigger resize for all terminals when panel layout changes.
+  // v1 (SplitView): outer container has no layout transitions (instant snap), so a single-frame
+  // delay is sufficient for the browser to apply the new layout before measuring.
+  // v2 (WindowGrid): ResizeObserver handles this automatically — no timer needed.
   const panelResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (USE_GRID_LAYOUT) return; // v2: ResizeObserver handles panel-triggered resizes
     if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current);
     panelResizeTimerRef.current = setTimeout(() => {
       resizeCoordinatorRef.current.triggerResize();
-    }, 220);
+    }, 16);
     return () => { if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current); };
   }, [sidePanelOpen, sidePanelExpanded, todoPanelExpanded, todoPanelWidth, minimapVisible]);
 
+  // v1 fallback: delayed resize timeouts per window (not used in v2)
   const fitTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   const handleLayoutChange = useCallback((id: string, layout: { x: number; y: number; width: number; height: number }, isDragging = false, skipResize = false) => {
     setWindows(prev => prev.map(w => w.id === id ? { ...w, ...layout } : w));
     sendMessage({ type: 'window:layout', windowId: id, ...layout });
 
+    // v2 (WindowGrid): ResizeObserver fires automatically when grid pane resizes.
+    // No manual resize scheduling needed — drag, swap, and zoom all handled by CSS Grid.
+    if (USE_GRID_LAYOUT) return;
+
+    // --- v1 fallback path (SplitView) ---
     if (isDragging) {
       return;
     }
@@ -936,7 +1017,25 @@ export default function App() {
     };
 
     const handleTerminalResize = (cols: number, rows: number) => {
-      sendMessage({ type: 'window:resize', windowId, cols, rows });
+      // Buffer output during server roundtrip — cleared on window:resized ack
+      outputPipelineRef.current?.setResizePending(windowId, true);
+      // RC-3: Monotonic seq lets client ignore stale acks from superseded resizes
+      const prev = resizeSeqRef.current.get(windowId) ?? 0;
+      const seq = prev + 1;
+      resizeSeqRef.current.set(windowId, seq);
+      // RC-4: Reset two-flag gate for this resize cycle
+      const oldGate = resizeGateRef.current.get(windowId);
+      if (oldGate?.safetyTimer) clearTimeout(oldGate.safetyTimer);
+      const safetyTimer = setTimeout(() => {
+        // Safety: release buffer if canvas verify or server ack never arrives
+        const gate = resizeGateRef.current.get(windowId);
+        if (gate && (!gate.serverAcked || !gate.canvasVerified)) {
+          resizeGateRef.current.delete(windowId);
+          outputPipelineRef.current?.setResizePending(windowId, false);
+        }
+      }, 200);
+      resizeGateRef.current.set(windowId, { serverAcked: false, canvasVerified: false, safetyTimer });
+      sendMessage({ type: 'window:resize', windowId, cols, rows, seq });
     };
 
     // WebGL recovery coordination - notify output pipeline to pause
@@ -957,6 +1056,11 @@ export default function App() {
     // WebGL recovery coordination - resume output pipeline and re-request restore if needed
     const handleRecoveryEnd = (terminalId: string, success: boolean) => {
       outputPipelineRef.current?.setRecoveryInProgress(terminalId, false);
+
+      // v2 grid: replay any resize that was deferred during recovery
+      if (USE_GRID_LAYOUT) {
+        gridResizeRef.current.notifyRecoveryEnd(terminalId);
+      }
 
       if (success) {
         // FIX RS-2: Check if terminal size changed during recovery
@@ -998,7 +1102,7 @@ export default function App() {
       }
     };
 
-    const handleTerminalReady = (term: XTerm, _fitAddon: FitAddon) => {
+    const handleTerminalReady = (term: XTerm, fitAddon: FitAddon) => {
       sendMessage({
         type: 'window:subscribe',
         windowId,
@@ -1008,6 +1112,42 @@ export default function App() {
 
       // Subscribe to context usage updates for this window
       sendMessage({ type: 'context:subscribe', windowId });
+
+      // v2: Register with grid resize observer (retry up to 3 times if DOM not ready)
+      if (USE_GRID_LAYOUT) {
+        const registerGridPane = (attempt: number) => {
+          const paneEl = document.querySelector(`[data-grid-pane-id="${windowId}"]`) as HTMLElement;
+          if (!paneEl) {
+            if (attempt < 3) {
+              setTimeout(() => registerGridPane(attempt + 1), 50);
+              return;
+            }
+            console.warn(`[useGridResize] Pane element not found for window ${windowId} after ${attempt + 1} attempts — resize observation skipped`);
+            return;
+          }
+          gridResizeRef.current.register({
+            id: windowId,
+            fitAddon,
+            element: paneEl,
+            onResize: handleTerminalResize,
+            isRecovering: () => outputPipelineRef.current?.isRecoveryInProgress(windowId) ?? false,
+            onResizePending: (pending) => outputPipelineRef.current?.setResizePending(windowId, pending),
+            // RC-4: Canvas verify completed — check two-flag gate to release buffer
+            onCanvasVerified: () => {
+              const gate = resizeGateRef.current.get(windowId);
+              if (gate) {
+                gate.canvasVerified = true;
+                if (gate.serverAcked) {
+                  if (gate.safetyTimer) clearTimeout(gate.safetyTimer);
+                  resizeGateRef.current.delete(windowId);
+                  outputPipelineRef.current?.setResizePending(windowId, false);
+                }
+              }
+            },
+          });
+        };
+        registerGridPane(0);
+      }
 
       term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
         const isCtrlOrCmd = event.ctrlKey || event.metaKey;
@@ -1063,13 +1203,14 @@ export default function App() {
             if (selection.length > 0) {
               selectionRefs.current.set(windowId, selection);
 
-              // Clear stale selections after 30 seconds to prevent memory accumulation
-              // Selection strings can be 10KB+ and accumulate over extended sessions
-              setTimeout(() => {
-                if (selectionRefs.current.get(windowId) === selection) {
-                  selectionRefs.current.delete(windowId);
-                }
-              }, 30000);
+              // FIX F: Single debounced timeout per window (replaces per-selection timeouts)
+              // Cancel previous cleanup timer, schedule a new one
+              const existingTimer = selectionCleanupTimers.current.get(windowId);
+              if (existingTimer) clearTimeout(existingTimer);
+              selectionCleanupTimers.current.set(windowId, setTimeout(() => {
+                selectionRefs.current.delete(windowId);
+                selectionCleanupTimers.current.delete(windowId);
+              }, 30000));
             }
             // Don't clear on empty - keep last known selection for context menu
           });
@@ -1114,8 +1255,8 @@ export default function App() {
           pendingRestoreRef.current.delete(windowId);
           const filteredPending = filterThinkingOutput(pendingRestore);
           requestAnimationFrame(() => {
-            handle.terminal?.reset();
-            handle.terminal?.write(filteredPending, () => {
+            // FIX A: Use ANSI clear instead of reset() to preserve scrollback
+            handle.terminal?.write('\x1b[2J\x1b[H' + filteredPending, () => {
               handle.terminal?.scrollToBottom();
               // Exit restore mode now that pending content is flushed
               outputPipelineRef.current?.setRestoreInProgress(windowId, false);
@@ -1125,6 +1266,11 @@ export default function App() {
       } else {
         terminalRefs.current.delete(windowId);
         selectionRefs.current.delete(windowId);
+
+        // v2: Unregister from grid resize observer
+        if (USE_GRID_LAYOUT) {
+          gridResizeRef.current.unregister(windowId);
+        }
 
         // Clean up capture-phase contextmenu listener
         const stored = contextMenuHandlersRef.current.get(windowId);
@@ -1296,8 +1442,6 @@ export default function App() {
   showPlaylistRef.current = showPlaylist;
 
   // Check if a media window already exists
-  const hasMediaWindow = windows.some(w => w.type === 'media');
-
   // Mode toggle handlers
   const handleDockToWindow = useCallback(() => {
     if (!sessionId) return;
@@ -1340,7 +1484,7 @@ export default function App() {
   const renderWindow = useCallback((
     windowId: string,
     isFocused: boolean,
-    windowType: 'terminal' | 'media'
+    windowType: 'terminal' | 'media' | 'agent'
   ) => {
     if (windowType === 'media') {
       const mps = musicPlayerStateRef.current;
@@ -1705,14 +1849,14 @@ export default function App() {
         <TemplateToolbar
           onExecuteCommand={handleExecuteCommand}
         />
-        <span className="text-[12px] sm:text-sm text-[#a1a1aa] font-medium tabular-nums px-2.5 py-1.5 rounded-md bg-white/[0.03] border border-white/[0.04]">{windows.length}/6</span>
-        <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent" />
-        <ProjectNavigator onSelectProject={handleProjectSelect} />
-        <ArtifactToolbarButton
+        <span className="hidden sm:inline text-[12px] sm:text-sm text-[#a1a1aa] font-medium tabular-nums px-2.5 py-1.5 rounded-md bg-white/[0.03] border border-white/[0.04]">{windows.length}/6</span>
+        <div className="hidden sm:block w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent" />
+        <span className="hidden sm:inline"><ProjectNavigator onSelectProject={handleProjectSelect} /></span>
+        <span className="hidden sm:inline"><ArtifactToolbarButton
           unreadCount={canvasUnreadCount}
           totalCount={canvasArtifacts.length}
           onOpen={() => setCanvasViewerOpen(true)}
-        />
+        /></span>
         <button
           onClick={(e) => { e.stopPropagation(); setQuickKeysVisible(!quickKeysVisible); }}
           onMouseDown={(e) => e.stopPropagation()}
@@ -1762,11 +1906,40 @@ export default function App() {
           <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />
           {toolbarContent}
           <div className="flex items-center gap-1.5">
+            {/* Mobile-only template hamburger (moved here so it's not occluded by toolbarContent) */}
+            <div className="sm:hidden">
+              <TemplateToolbar onExecuteCommand={handleExecuteCommand} mobileOnly />
+            </div>
+            {/* Mobile-only tasks toggle */}
+            <button
+              onClick={(e) => { e.stopPropagation(); setTodoPanelExpanded(prev => !prev); }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              className={`sm:hidden relative p-2 rounded-lg transition-all duration-200 border ${
+                todoPanelExpanded
+                  ? 'bg-gradient-to-br from-[#00d4ff]/20 to-[#8b5cf6]/10 text-[#00d4ff] shadow-[0_0_16px_rgba(0,212,255,0.15)] border-[#00d4ff]/25'
+                  : 'text-[#71717a] hover:text-white hover:bg-white/[0.06] border-transparent hover:border-white/[0.06]'
+              }`}
+              title="Toggle tasks"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {todoCount > 0 && !todoPanelExpanded && (
+                <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full px-1 ${
+                  todoHasActive
+                    ? 'bg-[#00d4ff] text-black shadow-[0_0_8px_rgba(0,212,255,0.5)]'
+                    : 'bg-[#71717a] text-white'
+                }`}>
+                  {todoCount > 9 ? '9+' : todoCount}
+                </span>
+              )}
+            </button>
             <button
               onClick={() => setSidePanelOpen(!sidePanelOpen)}
               className={`p-2 rounded-lg transition-all duration-200 ${
-                sidePanelOpen 
-                  ? 'bg-gradient-to-br from-[#00d4ff]/20 to-[#8b5cf6]/10 text-[#00d4ff] shadow-[0_0_16px_rgba(0,212,255,0.2),inset_0_1px_0_rgba(255,255,255,0.1)] border border-[#00d4ff]/30' 
+                sidePanelOpen
+                  ? 'bg-gradient-to-br from-[#00d4ff]/20 to-[#8b5cf6]/10 text-[#00d4ff] shadow-[0_0_16px_rgba(0,212,255,0.2),inset_0_1px_0_rgba(255,255,255,0.1)] border border-[#00d4ff]/30'
                   : 'text-[#71717a] hover:text-white hover:bg-white/[0.06] border border-transparent hover:border-white/[0.06]'
               }`}
               title="Toggle tools panel (⌘B)"
@@ -1798,6 +1971,17 @@ export default function App() {
         </button>
       )}
       
+      {cockpitEnabled && activeTeam && !dismissed && (
+        <TeamBar
+          team={activeTeam}
+          onAgentClick={(name) => {
+            setExpandedAgent(expandedAgent === name ? null : name);
+          }}
+          expandedAgent={expandedAgent}
+          logEvents={logEvents}
+          onDismiss={() => setDismissed(true)}
+        />
+      )}
       <div className="flex-1 min-h-0 relative">
         <TodoPanel
           expanded={todoPanelExpanded}
@@ -1805,25 +1989,64 @@ export default function App() {
           sessions={todoSessions}
           isLoading={todosLoading}
           onWidthChange={setTodoPanelWidth}
+          isMobile={isMobile}
         />
-        <SplitView
-          windows={windows}
-          activeWindowId={activeWindowId}
-          onWindowFocus={handleWindowFocus}
-          onWindowClose={handleWindowClose}
-          onWindowMinimize={handleWindowMinimize}
-          onWindowRestore={handleWindowRestore}
-          onLayoutChange={handleLayoutChange}
-          onAddWindow={handleAddWindow}
-          onWindowRename={handleWindowRename}
-          renderWindow={renderWindow}
-          sidePanelOpen={sidePanelOpen}
-          minimapVisible={minimapVisible}
-          leftOffset={todoPanelExpanded ? todoPanelWidth : 48}
-          contextUsage={contextUsage}
-          todoCount={todoCount}
-          todoHasActive={todoHasActive}
-        />
+        {USE_GRID_LAYOUT ? (
+          <div className="absolute bg-[#0a0a0f]" style={{ top: 0, left: isMobile ? 0 : (todoPanelExpanded ? todoPanelWidth : 48), bottom: 0, right: 0 }}>
+          <WindowGrid
+            windows={windows as GridWindowConfig[]}
+            activeWindowId={activeWindowId}
+            onWindowFocus={handleWindowFocus}
+            onWindowClose={handleWindowClose}
+            onWindowMinimize={handleWindowMinimize}
+            onWindowRestore={handleWindowRestore}
+            onLayoutChange={handleLayoutChange}
+            onAddWindow={handleAddWindow}
+            renderWindow={(id, type) => renderWindow(id, activeWindowId === id, type as 'terminal' | 'media')}
+            renderTitleBar={(id, config) => (
+              <div className="grid-pane-titlebar" style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                padding: '2px 8px', fontSize: '11px',
+                backgroundColor: 'rgba(0,0,0,0.5)',
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                userSelect: 'none', minHeight: '22px',
+              }}>
+                <span style={{ color: '#00d4ff', fontSize: '10px' }}>
+                  {config.isMain ? '◆' : '◇'}
+                </span>
+                <span style={{ color: 'rgba(255,255,255,0.7)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {config.name || `Window ${id.slice(0, 4)}`}
+                </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleWindowClose(id); }}
+                  style={{ color: 'rgba(255,255,255,0.3)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 2px', fontSize: '14px', fontFamily: 'inherit' }}
+                  title="Close"
+                >×</button>
+              </div>
+            )}
+          />
+          </div>
+        ) : (
+          <SplitView
+            windows={windows}
+            activeWindowId={activeWindowId}
+            onWindowFocus={handleWindowFocus}
+            onWindowClose={handleWindowClose}
+            onWindowMinimize={handleWindowMinimize}
+            onWindowRestore={handleWindowRestore}
+            onLayoutChange={handleLayoutChange}
+            onAddWindow={handleAddWindow}
+            onWindowRename={handleWindowRename}
+            renderWindow={renderWindow}
+            sidePanelOpen={sidePanelOpen}
+            minimapVisible={minimapVisible}
+            leftOffset={isMobile ? 0 : (todoPanelExpanded ? todoPanelWidth : 48)}
+            contextUsage={contextUsage}
+            todoCount={todoCount}
+            todoHasActive={todoHasActive}
+          />
+        )}
         <SidePanel
           isOpen={sidePanelOpen}
           onClose={() => setSidePanelOpen(false)}

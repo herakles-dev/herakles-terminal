@@ -3,6 +3,7 @@ import App from './App';
 import { ToastProvider } from './components/Toast/Toast';
 import './styles/terminal.css';
 import './styles/terminal-mobile.css';
+import './styles/grid-layout.css';
 
 createRoot(document.getElementById('root')!).render(
   <ToastProvider>

@@ -117,10 +117,16 @@ export function extractAuthFromUpgrade(req: IncomingMessage): AutheliaUser | nul
   
   console.log(`[Auth] Headers - user: ${headers.username}, email: ${headers.email}`);
 
-  if (!headers.username || !headers.email) {
-    // SECURITY: Development bypass only allowed if explicitly enabled
+  if (!headers.username) {
+    console.log('[Auth] Rejected: missing username header');
+    return null;
+  }
+
+  // Email may be missing on proxied WebSocket upgrades (nginx auth_request
+  // doesn't always pass Remote-Email for WS). Use fallback for trusted proxy.
+  if (!headers.email) {
     if (process.env.NODE_ENV === 'development' && process.env.ALLOW_DEV_AUTH_BYPASS === 'true') {
-      console.log('[Auth] ⚠️  WARNING: Dev mode auth bypass enabled - NOT FOR PRODUCTION');
+      console.log('[Auth] Dev mode auth bypass enabled');
       return {
         username: 'dev-user',
         email: 'dev@herakles.dev',
@@ -128,8 +134,8 @@ export function extractAuthFromUpgrade(req: IncomingMessage): AutheliaUser | nul
         name: 'Development User',
       };
     }
-    console.log('[Auth] Rejected: missing username or email headers');
-    return null;
+    console.log(`[Auth] No email for ${headers.username}, using fallback`);
+    headers.email = `${headers.username}@herakles.dev`;
   }
 
   if (!isValidEmail(headers.email) || !isValidUsername(headers.username)) {

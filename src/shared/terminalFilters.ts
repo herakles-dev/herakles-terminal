@@ -34,6 +34,10 @@ function isThinkingLine(stripped: string): boolean {
   // Filter lines that are ONLY dots and whitespace (e.g. "....." or ". . . .")
   if (/^[.\s]+$/.test(stripped)) return true;
 
+  // Filter consecutive dots (20+) — tmux SIGWINCH resize artifact
+  // Catches lines like "hello....................world" where dots are embedded in other content
+  if (/\.{20,}/.test(stripped)) return true;
+
   // Filter braille spinner lines (pure braille or braille-prefixed like "⠋ Thinking...")
   if (/^[\u2800-\u28FF]/.test(stripped)) return true;
 
@@ -69,5 +73,55 @@ export function filterThinkingOutput(data: string): string {
     if (isThinkingLine(stripped)) continue;
     result.push(part);
   }
+  return result.join('');
+}
+
+/**
+ * Carriage-return-based thinking filter.
+ * Claude Code spinner uses \r to overwrite the same line: `\r⠋ Thinking...\r⠙ Thinking...`
+ * When split by \r, only the LAST segment matters (it's what the user sees).
+ * Filters out all \r-delimited segments that are thinking lines, keeping the final
+ * non-thinking segment if any.
+ */
+export function filterCarriageReturnThinking(data: string): string {
+  // Only apply if data contains \r (without \n following) — the spinner pattern
+  if (!data.includes('\r')) return data;
+
+  // Process each line independently (preserve \n-delimited structure)
+  const lines = data.split(/(\r\n|\n)/);
+  const result: string[] = [];
+
+  for (const line of lines) {
+    if (line === '\r\n' || line === '\n') {
+      result.push(line);
+      continue;
+    }
+
+    // Split on bare \r (not \r\n)
+    const segments = line.split('\r');
+    if (segments.length <= 1) {
+      result.push(line);
+      continue;
+    }
+
+    // Keep only the last non-thinking segment
+    // Claude spinner: \r⠋ Thinking...\r⠙ Thinking...\r (last segment is empty or final state)
+    let kept: string | null = null;
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      const stripped = seg.replace(ANSI_STRIP_REGEX, '').trim();
+      if (stripped.length === 0) continue;
+      if (isThinkingLine(stripped)) continue;
+      // Found a non-thinking segment — keep it
+      kept = seg;
+      break;
+    }
+
+    if (kept !== null) {
+      result.push(kept);
+    }
+    // If all segments are thinking lines, drop the entire line
+  }
+
   return result.join('');
 }

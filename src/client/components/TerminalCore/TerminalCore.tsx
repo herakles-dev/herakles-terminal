@@ -5,7 +5,8 @@ import { THEMES, getTheme } from '@shared/constants';
 import { useTerminalCore } from '../../hooks/useTerminalCore';
 import { useXTermSetup } from '../../hooks/useXTermSetup';
 import { useRendererSetup } from '../../hooks/useRendererSetup';
-import { useResizeCoordinatorContext } from '../../contexts/ResizeCoordinatorContext';
+import { useOptionalResizeCoordinator } from '../../contexts/ResizeCoordinatorContext';
+import { USE_GRID_LAYOUT } from '@shared/constants';
 import type { WebGLHealthMonitor } from '../../services/WebGLHealthMonitor';
 
 /**
@@ -192,8 +193,8 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
       healthMonitor,
     });
 
-    // Hook 4: Resize coordination (existing from Sprint 1)
-    const resizeCoordinator = useResizeCoordinatorContext();
+    // Hook 4: Resize coordination — v1 only (v2 uses useGridResize in App.tsx)
+    const resizeCoordinator = useOptionalResizeCoordinator();
 
     // Store fitAddon separately for imperative handle
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -246,17 +247,20 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
           // Step 4: NOW safe to fit - WebGL is ready
           fitAddon.fit();
 
-          // Step 5: Register with resize coordinator (skip auto-resize, we just did fit)
-          const unregister = resizeCoordinator.register(
-            {
-              id: terminalId,
-              fitAddon,
-              onResize,
-              isRecovering,  // FIX RS-2: Pass recovery check to block resize during recovery
-              getTermElement: () => containerRef.current,  // FIX WG-1: For canvas dimension verification
-            },
-            { skipInitialResize: true }
-          );
+          // Step 5: Register with resize coordinator (v1 only — v2 uses ResizeObserver via useGridResize)
+          let unregister: (() => void) | undefined;
+          if (!USE_GRID_LAYOUT && resizeCoordinator) {
+            unregister = resizeCoordinator.register(
+              {
+                id: terminalId,
+                fitAddon,
+                onResize,
+                isRecovering,  // FIX RS-2: Pass recovery check to block resize during recovery
+                getTermElement: () => containerRef.current,  // FIX WG-1: For canvas dimension verification
+              },
+              { skipInitialResize: true }
+            );
+          }
 
           // Step 6: NOW safe to call onReady - WebGL is fully initialized
           if (onReady) {
@@ -269,7 +273,7 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
           cleanupRef.current = () => {
             dataDisposable.dispose();
             disposeRenderer();
-            unregister();
+            unregister?.();
           };
         } catch (error) {
           console.error(`[${terminalId}] Failed to initialize TerminalCore:`, error);
@@ -287,8 +291,13 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
     useEffect(() => {
       if (terminalRef.current && fitAddonRef.current && fontSize !== undefined) {
         terminalRef.current.options.fontSize = fontSize;
-        // Use unified resize path with immediate flag (skips debounce, still waits for transitions)
-        resizeCoordinator.resizeTarget(terminalId, true);
+        if (!USE_GRID_LAYOUT && resizeCoordinator) {
+          // v1: Use unified resize path with immediate flag
+          resizeCoordinator.resizeTarget(terminalId, true);
+        } else {
+          // v2: Just fit directly — ResizeObserver handles the rest
+          fitAddonRef.current.fit();
+        }
       }
     }, [fontSize, resizeCoordinator, terminalId]);
 

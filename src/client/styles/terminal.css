@@ -69,6 +69,16 @@
 
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* Z-index scale — single source of truth */
+  --z-resize: 20;
+  --z-lightning: 50;
+  --z-minimap: 45;
+  --z-dock: 90;
+  --z-bar: 100;          /* QuickKeyBar, TodoPanel */
+  --z-window-controls: 1000;
+  --z-youtube: 9998;
+  --z-overlay: 9999;     /* ContextMenu, Toast, modals */
 }
 
 @supports not (height: 100dvh) {
@@ -127,6 +137,14 @@ body {
   position: absolute;
   z-index: 20;
   background: transparent;
+  touch-action: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .resize-handle.resize-e,
+  .resize-handle.resize-w { width: 12px; }
+  .resize-handle.resize-s { height: 12px; }
+  .resize-handle.resize-se { width: 20px; height: 20px; }
 }
 
 .resize-handle.resize-e {
@@ -232,7 +250,7 @@ body {
   scrollbar-width: none;
   -ms-overflow-style: none;
   flex-shrink: 0;
-  z-index: 100;
+  z-index: var(--z-bar);
   padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
 }
 
@@ -245,8 +263,9 @@ body {
   align-items: center;
   justify-content: center;
   min-width: 44px;
-  height: 40px;
+  height: 44px;
   padding: 0 10px;
+  touch-action: manipulation;
   background: linear-gradient(180deg, rgba(28, 28, 38, 0.8) 0%, rgba(22, 22, 30, 0.8) 100%);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-md);
@@ -299,6 +318,60 @@ body {
   border-color: rgba(0, 212, 255, 0.5);
   color: #a5f3fc;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 212, 255, 0.2);
+}
+
+.quick-key.modifier {
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.12) 0%, rgba(99, 60, 200, 0.08) 100%);
+  border-color: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.quick-key.modifier:hover {
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.25) 0%, rgba(99, 60, 200, 0.15) 100%);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: #ddd6fe;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 20px rgba(139, 92, 246, 0.15);
+}
+
+.quick-key.modifier--active {
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.3) 0%, rgba(139, 92, 246, 0.2) 100%);
+  border-color: rgba(0, 212, 255, 0.6);
+  color: #00d4ff;
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3), 0 0 24px rgba(0, 212, 255, 0.1), inset 0 1px 0 rgba(0, 212, 255, 0.2);
+  animation: modifier-pulse 2s ease-in-out infinite;
+}
+
+.quick-key.modifier--active:hover {
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.4) 0%, rgba(139, 92, 246, 0.3) 100%);
+  border-color: #00d4ff;
+  box-shadow: 0 0 16px rgba(0, 212, 255, 0.4), 0 0 32px rgba(0, 212, 255, 0.15), inset 0 1px 0 rgba(0, 212, 255, 0.3);
+}
+
+@keyframes modifier-pulse {
+  0%, 100% { box-shadow: 0 0 12px rgba(0, 212, 255, 0.3), 0 0 24px rgba(0, 212, 255, 0.1), inset 0 1px 0 rgba(0, 212, 255, 0.2); }
+  50% { box-shadow: 0 0 16px rgba(0, 212, 255, 0.45), 0 0 32px rgba(0, 212, 255, 0.15), inset 0 1px 0 rgba(0, 212, 255, 0.3); }
+}
+
+/* Keys affected by active modifier */
+.quick-key.ctrl-modified {
+  border-color: rgba(0, 212, 255, 0.3);
+  color: #67e8f9;
+}
+
+.quick-key.symbol {
+  background: linear-gradient(180deg, rgba(38, 38, 50, 0.8) 0%, rgba(30, 30, 40, 0.8) 100%);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+  font-size: 16px;
+}
+
+.quick-key.symbol:hover {
+  background: linear-gradient(180deg, rgba(50, 50, 65, 0.9) 0%, rgba(40, 40, 55, 0.9) 100%);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #f8fafc;
 }
 
 .quick-key.highlight {
@@ -885,5 +958,33 @@ select:focus-visible {
     transform: scale(1.1);
     opacity: 0.85;
   }
+}
+
+/* Todo drawer (mobile overlay) */
+.todo-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-bar);
+  background: rgba(0, 0, 0, 0.5);
+  animation: fade-in 0.2s ease-out;
+}
+
+.todo-drawer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 101;
+  background: rgba(10, 10, 15, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+  animation: todo-drawer-slide-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes todo-drawer-slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
 }
 

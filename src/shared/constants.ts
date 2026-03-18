@@ -46,22 +46,24 @@ export const MOBILE_CONSTANTS = {
 };
 
 export const QUICK_KEYS = [
-  { id: 'ctrl-c', label: '^C', value: '\x03', category: 'control' as const },
-  { id: 'ctrl-d', label: '^D', value: '\x04', category: 'control' as const },
-  { id: 'ctrl-z', label: '^Z', value: '\x1a', category: 'control' as const },
-  { id: 'ctrl-l', label: '^L', value: '\x0c', category: 'control' as const },
-  { id: 'pipe', label: '|', value: '|', category: 'symbol' as const },
-  { id: 'gt', label: '>', value: '>', longPress: '>>', category: 'symbol' as const },
-  { id: 'tilde', label: '~', value: '~', category: 'symbol' as const },
-  { id: 'backtick', label: '`', value: '`', category: 'symbol' as const },
-  { id: 'tab', label: 'TAB', value: '\t', category: 'navigation' as const },
-  { id: 'up', label: '↑', value: '\x1b[A', category: 'navigation' as const },
-  { id: 'down', label: '↓', value: '\x1b[B', category: 'navigation' as const },
+  { id: 'ctrl', label: 'Ctrl', value: '', category: 'modifier' as const },
   { id: 'esc', label: 'ESC', value: '\x1b', category: 'navigation' as const },
-  { id: 'slash', label: '/', value: '/', category: 'claude' as const },
-  { id: 'yes', label: 'y', value: 'y\n', category: 'claude' as const },
-  { id: 'no', label: 'n', value: 'n\n', category: 'claude' as const },
+  { id: 'tab', label: 'TAB', value: '\t', category: 'navigation' as const },
+  { id: 'shift-tab', label: '\u21E7TAB', value: '\x1b[Z', category: 'navigation' as const },
+  { id: 'enter', label: '\u21B5', value: '\r', category: 'navigation' as const },
+  { id: 'left', label: '\u2190', value: '\x1b[D', category: 'navigation' as const },
+  { id: 'right', label: '\u2192', value: '\x1b[C', category: 'navigation' as const },
+  { id: 'up', label: '\u2191', value: '\x1b[A', category: 'navigation' as const },
+  { id: 'down', label: '\u2193', value: '\x1b[B', category: 'navigation' as const },
+  { id: 'slash', label: '/', value: '/', category: 'symbol' as const },
+  { id: 'tilde', label: '~', value: '~', category: 'symbol' as const },
+  { id: 'claude', label: 'Claude', value: 'claude --dangerously-skip-permissions\r', category: 'claude' as const },
 ];
+
+/** Feature flag: use CSS Grid layout instead of SplitView absolute positioning.
+ * v1.3.0: Re-promoted then reverted — v2 still has typing glitches (line duplication, cursor jumps).
+ * v1 SplitView remains the stable production path. */
+export const USE_GRID_LAYOUT = false;
 
 export { THEMES, getTheme, getThemeNames, validateTheme } from './themes.js';
 export type { ThemeName } from './themes.js';

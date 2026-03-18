@@ -6,7 +6,7 @@ import type { ContextUsage } from '../../../shared/contextProtocol';
 interface WindowConfig {
   id: string;
   name: string;
-  type: 'terminal' | 'media';
+  type: 'terminal' | 'media' | 'agent';
   x: number;
   y: number;
   width: number;
@@ -50,7 +50,7 @@ interface SplitViewProps {
   onAddWindow: () => void;
   onWindowRename?: (id: string, name: string) => void;
   onLayoutsChange?: (layouts: WindowLayout[]) => void;
-  renderWindow: (windowId: string, isFocused: boolean, windowType: 'terminal' | 'media') => React.ReactNode;
+  renderWindow: (windowId: string, isFocused: boolean, windowType: 'terminal' | 'media' | 'agent') => React.ReactNode;
   sidePanelOpen?: boolean;
   sidePanelExpanded?: boolean;
   minimapVisible?: boolean;
@@ -117,15 +117,14 @@ export default function SplitView({
     position: number;
     affectedWindows: [string, string];
   } | null>(null);
-  // Suppress CSS transitions during resize completion so fitAddon.fit() sees final dimensions instantly.
-  // Without this, the 200ms transition-all animation on window containers causes fitAddon.fit() to
-  // measure intermediate sizes, resulting in dark gaps when expanding terminals.
-  // FIX Bug 1: Use ref + direct DOM classList manipulation instead of React useState.
-  // React 18 batches state updates, so useState doesn't take effect before RAF fires.
-  // Direct classList manipulation is synchronous — the class is removed/added instantly.
+  // Suppress cosmetic CSS transitions during resize completion so fitAddon.fit() sees final dimensions.
+  // Layout transitions (width, height, left, top) were removed from window containers entirely —
+  // only cosmetic transitions (border-color, box-shadow, outline, ring) remain in the className.
+  // This suppression mechanism disables even those cosmetic transitions during resize to prevent
+  // findTransitionAncestor() from detecting them and adding unnecessary wait delays.
   const suppressTransitionsRef = useRef(false);
   const windowContainerRefs = useRef<Map<string, HTMLElement>>(new Map());
-  const TRANSITION_CLASS = 'transition-all';
+  const COSMETIC_TRANSITION_CLASS = 'transition-[border-color,box-shadow,outline,ring]';
   const DURATION_CLASS = 'duration-200';
   const SAFETY_TIMEOUT_MS = 500;
 
@@ -133,9 +132,9 @@ export default function SplitView({
     suppressTransitionsRef.current = suppress;
     windowContainerRefs.current.forEach((el) => {
       if (suppress) {
-        el.classList.remove(TRANSITION_CLASS, DURATION_CLASS);
+        el.classList.remove(COSMETIC_TRANSITION_CLASS, DURATION_CLASS);
       } else {
-        el.classList.add(TRANSITION_CLASS, DURATION_CLASS);
+        el.classList.add(COSMETIC_TRANSITION_CLASS, DURATION_CLASS);
       }
     });
   }, []);
@@ -145,9 +144,9 @@ export default function SplitView({
       windowContainerRefs.current.set(windowId, el);
       // Enforce current suppression state on newly registered elements
       if (suppressTransitionsRef.current) {
-        el.classList.remove(TRANSITION_CLASS, DURATION_CLASS);
+        el.classList.remove(COSMETIC_TRANSITION_CLASS, DURATION_CLASS);
       } else {
-        el.classList.add(TRANSITION_CLASS, DURATION_CLASS);
+        el.classList.add(COSMETIC_TRANSITION_CLASS, DURATION_CLASS);
       }
     } else {
       windowContainerRefs.current.delete(windowId);
@@ -324,10 +323,10 @@ export default function SplitView({
 
   const handleZoomToggle = useCallback((windowId: string) => {
     setZoomedWindowId(prev => prev === windowId ? null : windowId);
-    // Trigger resize after zoom animation completes
+    // Trigger resize after layout applies (no layout transitions, single-frame delay)
     setTimeout(() => {
       resizeCoordinator?.triggerResize();
-    }, 220);
+    }, 16);
   }, [resizeCoordinator]);
 
   const handleWindowClick = useCallback((e: React.MouseEvent, windowId: string) => {
@@ -922,7 +921,7 @@ export default function SplitView({
   const rightOffset = (minimapVisible ? minimapWidth : 0) + (sidePanelOpen ? sidePanelWidth : 0);
 
   return (
-    <div ref={containerRef} className="absolute bg-[#0a0a0f] transition-[left,right] duration-200 ease-out" style={{ top: 0, left: leftOffset, bottom: 0, right: rightOffset }}>
+    <div ref={containerRef} className="absolute bg-[#0a0a0f]" style={{ top: 0, left: leftOffset, bottom: 0, right: rightOffset }}>
       {snapGuides.x !== undefined && (
         <div 
           className="snap-guide snap-guide-v"
@@ -1032,7 +1031,7 @@ export default function SplitView({
         <div
           key={window.id}
           ref={windowContainerRefCallback(window.id)}
-          className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden transition-all duration-200 ${
+          className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden transition-[border-color,box-shadow,outline,ring] duration-200 ${
             isZoomed
               ? 'border-[#00d4ff]/60 shadow-[0_0_32px_rgba(0,212,255,0.15)] ring-1 ring-[#00d4ff]/20'
               : dropTarget === window.id
@@ -1214,16 +1213,17 @@ export default function SplitView({
 
       <button
         onClick={onAddWindow}
-        className="absolute bottom-3 flex items-center gap-2 px-5 py-3 bg-gradient-to-b from-[#111118]/95 to-[#0c0c14]/95 backdrop-blur-xl border border-white/[0.06] rounded-xl text-[#a1a1aa] hover:text-[#00d4ff] hover:border-[#00d4ff]/30 hover:shadow-[0_0_20px_rgba(0,212,255,0.1)] transition-all duration-200 shadow-lg group"
-        style={{ 
+        className="absolute flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 bg-gradient-to-b from-[#111118]/95 to-[#0c0c14]/95 backdrop-blur-xl border border-white/[0.06] rounded-xl text-[#a1a1aa] hover:text-[#00d4ff] hover:border-[#00d4ff]/30 hover:shadow-[0_0_20px_rgba(0,212,255,0.1)] transition-all duration-200 shadow-lg group"
+        style={{
           zIndex: 1000,
+          bottom: 72,
           right: 8 + (sidePanelOpen ? (minimapVisible ? 413 : 348) : minimapVisible ? 73 : 0)
         }}
       >
         <svg className="w-5 h-5 transition-transform duration-200 group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
         </svg>
-        <span className="text-sm font-medium">New Window</span>
+        <span className="hidden sm:inline text-sm font-medium">New Window</span>
       </button>
     </div>
   );

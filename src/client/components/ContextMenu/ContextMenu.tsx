@@ -30,7 +30,7 @@ export default function ContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleClickOutside = (e: Event) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         onClose();
       }
@@ -41,9 +41,11 @@ export default function ContextMenu({
     };
 
     document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
     };
   }, [onClose]);
@@ -51,15 +53,26 @@ export default function ContextMenu({
   useEffect(() => {
     if (menuRef.current) {
       const rect = menuRef.current.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const margin = 8; // safe margin from viewport edges
 
-      if (rect.right > viewportWidth) {
-        menuRef.current.style.left = `${x - rect.width}px`;
+      // Clamp horizontally — prefer left of cursor on overflow
+      let left = x;
+      if (rect.right > vw - margin) {
+        left = Math.max(margin, x - rect.width);
       }
-      if (rect.bottom > viewportHeight) {
-        menuRef.current.style.top = `${y - rect.height}px`;
+      if (left < margin) left = margin;
+
+      // Clamp vertically — prefer above cursor on overflow
+      let top = y;
+      if (rect.bottom > vh - margin) {
+        top = Math.max(margin, y - rect.height);
       }
+      if (top < margin) top = margin;
+
+      menuRef.current.style.left = `${left}px`;
+      menuRef.current.style.top = `${top}px`;
     }
   }, [x, y]);
 

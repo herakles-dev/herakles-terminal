@@ -4,7 +4,7 @@ export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'dis
 
 export type TriggerType = 'on_connect' | 'on_disconnect' | 'on_resume' | 'on_idle' | 'on_output_match' | 'scheduled';
 
-export type WindowType = 'terminal' | 'media';
+export type WindowType = 'terminal' | 'media' | 'agent';
 
 export interface Session {
   id: string;
@@ -262,7 +262,7 @@ export interface QuickKey {
   value: string;
   icon?: string;
   longPress?: string;
-  category: 'control' | 'symbol' | 'navigation' | 'claude';
+  category: 'control' | 'symbol' | 'navigation' | 'claude' | 'modifier';
 }
 
 export interface Command {

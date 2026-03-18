@@ -1,0 +1,120 @@
+/* WindowGrid + TeamBar styles */
+
+/* Grid container */
+.window-grid {
+  position: relative;
+}
+
+.window-grid--dragging {
+  user-select: none;
+}
+
+/* Grid pane */
+.grid-pane {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #000;
+}
+
+.grid-pane--active {
+  border-color: rgba(0, 212, 255, 0.2);
+}
+
+.grid-pane--swap-target {
+  border-color: #00d4ff;
+  background: rgba(0, 212, 255, 0.05);
+}
+
+/* Drag handles */
+.grid-handle {
+  background: transparent;
+  transition: background-color 0.15s;
+  position: relative;
+}
+
+.grid-handle:hover {
+  background: rgba(0, 212, 255, 0.1);
+}
+
+.grid-handle:active {
+  background: rgba(0, 212, 255, 0.2);
+}
+
+.grid-handle-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.grid-handle:hover .grid-handle-indicator {
+  opacity: 1;
+}
+
+.grid-handle-vertical .grid-handle-indicator {
+  width: 2px;
+  height: 24px;
+  background: rgba(0, 212, 255, 0.4);
+  border-radius: 1px;
+}
+
+.grid-handle-horizontal .grid-handle-indicator {
+  width: 24px;
+  height: 2px;
+  background: rgba(0, 212, 255, 0.4);
+  border-radius: 1px;
+}
+
+.grid-handle-intersection {
+  background: transparent;
+}
+
+.grid-handle-intersection:hover {
+  background: rgba(0, 212, 255, 0.15);
+}
+
+/* Agent status pulse animation */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Team bar chip hover */
+.team-bar-chip:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.team-bar-chip--active:hover {
+  background-color: rgba(0, 212, 255, 0.1) !important;
+}
+
+/* Team accordion slide-up animation */
+@keyframes accordionSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Accordion scrollbar */
+.team-accordion ::-webkit-scrollbar {
+  width: 4px;
+}
+
+.team-accordion ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.team-accordion ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.team-accordion ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

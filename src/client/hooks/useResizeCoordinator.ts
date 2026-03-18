@@ -1,7 +1,22 @@
+/**
+ * @deprecated v1 resize coordinator — use useGridResize.ts instead.
+ *
+ * This 453-line debounce-based coordinator is the fallback when USE_GRID_LAYOUT = false.
+ * The v2 replacement (useGridResize) achieves the same with ~140 lines via ResizeObserver.
+ *
+ * Migration path:
+ * - v2 uses ResizeObserver → RAF → fitAddon.fit() (single path for ALL resize triggers)
+ * - v2 has no debounce timers, no CSS transition waiting, no retry loops
+ * - v2 is the default since v1.2.1 (USE_GRID_LAYOUT = true in constants.ts)
+ *
+ * This file will be removed once the v1 SplitView layout is fully retired.
+ */
+
 import { useEffect, useRef, useCallback } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
 import { RESIZE_CONSTANTS } from '@shared/constants';
 
+/** @deprecated Use GridResizeTarget from useGridResize.ts instead */
 export interface ResizeTarget {
   id: string;
   fitAddon: FitAddon;
@@ -20,6 +35,7 @@ export interface ResizeTarget {
 
 /**
  * Options for registering a resize target.
+ * @deprecated Use useGridResize.ts instead
  */
 export interface RegisterOptions {
   /**
@@ -47,8 +63,8 @@ const COALESCE_DEBOUNCE_MS = 150;
 const RESIZE_TIMEOUT_MS = 3000;
 const CANVAS_DIMENSION_TOLERANCE = 4; // RC-3 fix: relaxed from 2 to reduce false mismatches
 const TRANSITION_WAIT_TIMEOUT_MS = 300;
-const CANVAS_VERIFY_MAX_RETRIES = 3; // Increased from 2 to give canvas one more sync chance post-resize
-const CANVAS_VERIFY_DELAYS = [16, 48, 100]; // Final 100ms delay for slow layout propagation
+const CANVAS_VERIFY_MAX_RETRIES = 1; // Single retry — avoids visible "reset" flicker
+const CANVAS_VERIFY_DELAYS = [32]; // One RAF-aligned delay
 const RESIZE_OBSERVER_FALLBACK_MS = 150; // Fallback if ResizeObserver doesn't fire
 const TRANSITION_PROPERTIES = new Set(['all', 'width', 'height', 'left', 'top', 'transform']);
 
@@ -125,46 +141,42 @@ async function verifyWebGLCanvasSyncWithRetry(
 }
 
 /**
- * FIX WG-1: Verify WebGL canvas dimensions match container
+ * FIX WG-1: Verify canvas dimensions match container
  * Returns true if canvas is properly synced, false if dimensions mismatch
  *
- * After fitAddon.fit(), the WebGL canvas should resize to match the container.
+ * After fitAddon.fit(), the canvas should resize to match the container.
  * If it doesn't, we get a black area on the right/bottom where canvas is smaller.
+ *
+ * NOTE: Does NOT call getContext() — that's expensive and can interfere with
+ * existing WebGL contexts. Just compares pixel dimensions directly.
  */
 function verifyWebGLCanvasSync(termElement: HTMLElement | null): boolean {
-  if (!termElement) return true; // Can't verify, assume OK
+  if (!termElement) return true;
 
+  // Find the largest canvas (WebGL render canvas, not the text measure canvas)
   const canvases = termElement.querySelectorAll('canvas');
+  if (canvases.length === 0) return true;
+
+  const rect = termElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.floor(rect.width * dpr);
+  const targetHeight = Math.floor(rect.height * dpr);
 
   for (const canvas of canvases) {
-    try {
-      // Only check WebGL canvases (XTerm's default canvases use 2D context)
-      const gl = (canvas as HTMLCanvasElement).getContext('webgl2', { failIfMajorPerformanceCaveat: true });
-      if (gl && !gl.isContextLost()) {
-        const rect = termElement.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        const targetWidth = Math.floor(rect.width * dpr);
-        const targetHeight = Math.floor(rect.height * dpr);
+    // Skip tiny canvases (text measurement, cursor, etc.)
+    if (canvas.width < 100 && canvas.height < 100) continue;
 
-        // Check if dimensions need sync (allow tolerance for rounding)
-        if (Math.abs(canvas.width - targetWidth) > CANVAS_DIMENSION_TOLERANCE ||
-            Math.abs(canvas.height - targetHeight) > CANVAS_DIMENSION_TOLERANCE) {
-          console.debug(
-            `[ResizeCoordinator] Canvas dimension mismatch: ` +
-            `canvas ${canvas.width}x${canvas.height} vs expected ~${targetWidth}x${targetHeight}`
-          );
-          return false; // Dimensions don't match - needs another fit
-        }
-        return true; // Dimensions match
-      }
-    } catch {
-      // getContext can throw if context type doesn't match existing
+    if (Math.abs(canvas.width - targetWidth) > CANVAS_DIMENSION_TOLERANCE ||
+        Math.abs(canvas.height - targetHeight) > CANVAS_DIMENSION_TOLERANCE) {
+      return false;
     }
+    return true; // First large canvas matches
   }
 
-  return true; // No WebGL canvas found or couldn't verify, assume OK
+  return true;
 }
 
+/** @deprecated Use useGridResize() instead. Kept as fallback when USE_GRID_LAYOUT = false. */
 export function useResizeCoordinator() {
   const targetsRef = useRef<Map<string, ResizeTarget>>(new Map());
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -220,12 +232,15 @@ export function useResizeCoordinator() {
 
         target.fitAddon.fit();
 
-        // Verify WebGL canvas dimensions match container (awaited, not fire-and-forget)
-        const termElement = target.getTermElement?.() ||
-          document.querySelector(`[data-terminal-id="${target.id}"]`) as HTMLElement | null;
+        // Only verify canvas sync on immediate resizes (post-recovery, initial setup).
+        // Skip during drag/debounced resizes — canvas will catch up on the next fit().
+        if (immediate) {
+          const termElement = target.getTermElement?.() ||
+            document.querySelector(`[data-terminal-id="${target.id}"]`) as HTMLElement | null;
 
-        if (termElement) {
-          await verifyWebGLCanvasSyncWithRetry(termElement, target.fitAddon, target.isRecovering);
+          if (termElement) {
+            await verifyWebGLCanvasSyncWithRetry(termElement, target.fitAddon, target.isRecovering);
+          }
         }
 
         if (target.onResize) {
@@ -428,9 +443,11 @@ export function useResizeCoordinator() {
 
   useEffect(() => {
     window.addEventListener('resize', handleBrowserResize, { passive: true });
+    window.addEventListener('orientationchange', handleBrowserResize, { passive: true });
 
     return () => {
       window.removeEventListener('resize', handleBrowserResize);
+      window.removeEventListener('orientationchange', handleBrowserResize);
 
       if (resizeTimeoutRef.current) {
         clearTimeout(resizeTimeoutRef.current);

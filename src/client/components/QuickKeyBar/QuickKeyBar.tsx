@@ -10,35 +10,44 @@ interface QuickKeyBarProps {
   onRefocus?: () => void;
 }
 
+/** Ctrl+Arrow escape sequences (word movement in most terminals) */
+const CTRL_ARROW: Record<string, string> = {
+  '\x1b[A': '\x1b[1;5A', // Ctrl+Up
+  '\x1b[B': '\x1b[1;5B', // Ctrl+Down
+  '\x1b[C': '\x1b[1;5C', // Ctrl+Right (word right)
+  '\x1b[D': '\x1b[1;5D', // Ctrl+Left (word left)
+};
+
 function useKeyboardOffset(): number {
   const [offset, setOffset] = useState(0);
-  
+
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    
+
     const update = () => {
       const keyboardHeight = window.innerHeight - vv.height;
       const scrollOffset = vv.offsetTop;
       setOffset(Math.max(0, keyboardHeight - scrollOffset));
     };
-    
+
     vv.addEventListener('resize', update);
     vv.addEventListener('scroll', update);
     update();
-    
+
     return () => {
       vv.removeEventListener('resize', update);
       vv.removeEventListener('scroll', update);
     };
   }, []);
-  
+
   return offset;
 }
 
 export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear, onRefocus }: QuickKeyBarProps) {
   const keyboardOffset = useKeyboardOffset();
-  
+  const [ctrlHeld, setCtrlHeld] = useState(false);
+
   const triggerHaptic = useCallback(() => {
     if (navigator.vibrate) {
       navigator.vibrate(10);
@@ -47,9 +56,22 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear
 
   const handleClick = useCallback((key: QuickKey) => {
     triggerHaptic();
-    onKey(key.value);
+
+    // Ctrl toggle — don't send a value, just flip state
+    if (key.id === 'ctrl') {
+      setCtrlHeld(prev => !prev);
+      return;
+    }
+
+    // Apply Ctrl modifier to arrow keys when held
+    let value = key.value;
+    if (ctrlHeld && CTRL_ARROW[value]) {
+      value = CTRL_ARROW[value];
+    }
+
+    onKey(value);
     onRefocus?.();
-  }, [onKey, triggerHaptic, onRefocus]);
+  }, [onKey, triggerHaptic, onRefocus, ctrlHeld]);
 
   const handleLongPress = useCallback((key: QuickKey) => {
     if (key.longPress) {
@@ -63,70 +85,98 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear
     e.preventDefault();
   }, []);
 
-  // Detect mobile and orientation for layout
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  const [isLandscape, setIsLandscape] = useState(
-    () => typeof window !== 'undefined' && window.innerWidth > window.innerHeight
-  );
-
-  useEffect(() => {
-    const mql = window.matchMedia('(orientation: landscape)');
-    const handler = (e: MediaQueryListEvent) => setIsLandscape(e.matches);
-    mql.addEventListener('change', handler);
-    return () => mql.removeEventListener('change', handler);
-  }, []);
-
   if (!visible) return null;
 
-  // Split keys into two rows for mobile layout
-  const firstRowKeys = isMobile ? QUICK_KEYS.slice(0, 8) : QUICK_KEYS;
-  const secondRowKeys = isMobile ? QUICK_KEYS.slice(8) : [];
+  // Group: modifier | nav keys | arrows | symbols | claude
+  const ctrlKey = QUICK_KEYS.find(k => k.id === 'ctrl')!;
+  const navKeys = QUICK_KEYS.filter(k => k.category === 'navigation' && !['up', 'down', 'left', 'right'].includes(k.id));
+  const arrowKeys = QUICK_KEYS.filter(k => ['up', 'down', 'left', 'right'].includes(k.id));
+  const symbolKeys = QUICK_KEYS.filter(k => k.category === 'symbol');
+  const claudeKeys = QUICK_KEYS.filter(k => k.category === 'claude');
 
   return (
     <div
-      className={`quick-key-bar safe-area-bottom px-3 py-2.5 bg-black/95 backdrop-blur-sm border-t border-[#27272a] fixed left-0 right-0 z-50 ${
-        isMobile && isLandscape ? 'quick-key-bar-mobile' : ''
-      } ${
-        isMobile ? 'flex flex-col gap-2' : 'flex items-center gap-2 overflow-x-auto'
-      }`}
+      className="quick-key-bar safe-area-bottom"
       style={{ bottom: `${keyboardOffset}px` }}
       onTouchStart={preventFocus}
       onMouseDown={preventFocus}
     >
-      <div className="flex items-center gap-1.5 w-full">
-        <button
-          onClick={onClose}
-          className="quick-key touch-feedback flex-shrink-0 !min-w-[40px] !px-2.5 text-[#a1a1aa] hover:text-white"
-          title="Close quick keys"
-          tabIndex={-1}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-        <div className="w-px h-8 bg-[#27272a] flex-shrink-0" />
-        <div className={`flex gap-1 ${isMobile ? 'flex-1 justify-between' : 'flex-shrink-0'}`}>
-          {firstRowKeys.map(key => (
-            <KeyButton 
-              key={key.id} 
-              keyConfig={key} 
+      {/* Close */}
+      <button
+        onClick={onClose}
+        className="quick-key touch-feedback flex-shrink-0 !min-w-[36px] !px-2 text-[#71717a] hover:text-white"
+        title="Close quick keys"
+        tabIndex={-1}
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+
+      <div className="w-px h-7 bg-[#27272a] flex-shrink-0" />
+
+      {/* Ctrl toggle */}
+      <button
+        className={`quick-key touch-feedback flex-shrink-0 ${ctrlHeld ? 'modifier--active' : 'modifier'}`}
+        onClick={() => { triggerHaptic(); setCtrlHeld(prev => !prev); }}
+        tabIndex={-1}
+        title={ctrlHeld ? 'Ctrl ON (tap to release)' : 'Ctrl modifier (tap to hold)'}
+      >
+        {ctrlKey.label}
+      </button>
+
+      <div className="w-px h-7 bg-[#27272a]/50 flex-shrink-0" />
+
+      {/* Nav keys: ESC, TAB, Shift+TAB, Enter */}
+      {navKeys.map(key => (
+        <KeyButton
+          key={key.id}
+          keyConfig={key}
+          onClick={handleClick}
+          onLongPress={handleLongPress}
+          ctrlHeld={ctrlHeld}
+        />
+      ))}
+
+      <div className="w-px h-7 bg-[#27272a]/50 flex-shrink-0" />
+
+      {/* Arrow cluster */}
+      {arrowKeys.map(key => (
+        <KeyButton
+          key={key.id}
+          keyConfig={key}
+          onClick={handleClick}
+          onLongPress={handleLongPress}
+          ctrlHeld={ctrlHeld}
+        />
+      ))}
+
+      <div className="w-px h-7 bg-[#27272a]/50 flex-shrink-0" />
+
+      {/* Symbols: / ~ */}
+      {symbolKeys.map(key => (
+        <KeyButton
+          key={key.id}
+          keyConfig={key}
+          onClick={handleClick}
+          onLongPress={handleLongPress}
+          ctrlHeld={false}
+        />
+      ))}
+
+      {claudeKeys.length > 0 && (
+        <>
+          <div className="w-px h-7 bg-[#27272a]/50 flex-shrink-0" />
+          {claudeKeys.map(key => (
+            <KeyButton
+              key={key.id}
+              keyConfig={key}
               onClick={handleClick}
               onLongPress={handleLongPress}
+              ctrlHeld={false}
             />
           ))}
-        </div>
-      </div>
-      {isMobile && secondRowKeys.length > 0 && (
-        <div className="flex gap-2 justify-between pl-[52px]">
-          {secondRowKeys.map(key => (
-            <KeyButton 
-              key={key.id} 
-              keyConfig={key} 
-              onClick={handleClick}
-              onLongPress={handleLongPress}
-            />
-          ))}
-        </div>
+        </>
       )}
     </div>
   );
@@ -136,9 +186,10 @@ interface KeyButtonProps {
   keyConfig: QuickKey;
   onClick: (key: QuickKey) => void;
   onLongPress: (key: QuickKey) => void;
+  ctrlHeld?: boolean;
 }
 
-function KeyButton({ keyConfig, onClick, onLongPress }: KeyButtonProps) {
+function KeyButton({ keyConfig, onClick, onLongPress, ctrlHeld }: KeyButtonProps) {
   const pressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isLongPressRef = useRef(false);
 
@@ -171,9 +222,14 @@ function KeyButton({ keyConfig, onClick, onLongPress }: KeyButtonProps) {
     isLongPressRef.current = false;
   }, []);
 
+  // Highlight arrow keys when Ctrl is held
+  const isCtrlModified = ctrlHeld && CTRL_ARROW[keyConfig.value];
+  const categoryClass = keyConfig.category;
+  const modifiedClass = isCtrlModified ? 'ctrl-modified' : '';
+
   return (
     <button
-      className={`quick-key touch-feedback ${keyConfig.category} flex-shrink-0`}
+      className={`quick-key touch-feedback ${categoryClass} ${modifiedClass} flex-shrink-0`}
       onPointerDown={handleStart}
       onPointerUp={handleEnd}
       onPointerLeave={handleCancel}

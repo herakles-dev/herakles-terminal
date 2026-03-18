@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { validateClientMessage, ValidatedClientMessage } from './messageSchema.js';
 import type { ServerMessage } from '../../shared/types.js';
 import { todoManager } from '../todo/TodoManager.js';
+import { teamManager } from '../team/TeamManager.js';
 import { todoFileWatcher } from '../todo/TodoFileWatcher.js';
 import { contextManager } from '../context/ContextManager.js';
 import { OutputRingBuffer } from '../window/OutputRingBuffer.js';
@@ -428,6 +429,14 @@ export class ConnectionManager {
       case 'artifact:unsubscribe':
         this.handleArtifactUnsubscribe(connection);
         break;
+
+      case 'team:subscribe':
+        teamManager.subscribe(connection.ws);
+        break;
+
+      case 'team:unsubscribe':
+        teamManager.unsubscribe(connection.ws);
+        break;
     }
   }
 
@@ -700,6 +709,13 @@ export class ConnectionManager {
 
   private async handleWindowClose(connection: Connection, windowId: string): Promise<void> {
     try {
+      // Cancel any pending resize timer for this window (prevents leaked timer)
+      const pendingResize = this.pendingResizes.get(windowId);
+      if (pendingResize) {
+        clearTimeout(pendingResize.timer);
+        this.pendingResizes.delete(windowId);
+      }
+
       const window = await this.windowManager.getWindow(windowId, connection.user.email);
       if (!window) return;
 
@@ -752,7 +768,11 @@ export class ConnectionManager {
     }
   }
 
-  // Server-side resize deduplication: coalesce rapid resize events
+  // Server-side resize deduplication: coalesce rapid resize events.
+  // 50ms window is appropriate for both v1 (debounce-based) and v2 (ResizeObserver-based).
+  // v2 sends fewer messages due to RAF batching, so 50ms rarely triggers coalescing —
+  // but it provides safety against rapid grid handle drags that produce multiple
+  // ResizeObserver entries within a single animation frame.
   private pendingResizes = new Map<string, { cols: number; rows: number; seq?: number; timer: ReturnType<typeof setTimeout>; connection: Connection }>();
 
   private async handleWindowResize(connection: Connection, windowId: string, cols: number, rows: number, seq?: number): Promise<void> {
@@ -765,13 +785,17 @@ export class ConnectionManager {
       this.pendingResizes.delete(windowId);
       try {
         const result = await this.windowManager.resizeWindow(windowId, cols, rows, connection.user.email);
-        this.send(connection.ws, {
-          type: 'window:resized',
-          windowId,
-          cols: result.cols,
-          rows: result.rows,
-          seq,
-        });
+        // RC-1: Short drain after tmux resize — lets SIGWINCH re-render output
+        // arrive at the client BEFORE the ack clears the pending buffer.
+        setTimeout(() => {
+          this.send(connection.ws, {
+            type: 'window:resized',
+            windowId,
+            cols: result.cols,
+            rows: result.rows,
+            seq,
+          });
+        }, 80);
       } catch (error) {
         console.error(`Resize error for window ${windowId}:`, error);
       }
@@ -805,7 +829,6 @@ export class ConnectionManager {
     rows?: number
   ): Promise<void> {
     if (!windowId) return;
-
     // Debounce key combines connection ID and window ID
     const timerKey = `${connection.id}:${windowId}`;
     const existingTimer = this.windowSubscribeTimers.get(timerKey);
@@ -1146,6 +1169,13 @@ export class ConnectionManager {
 
     for (const windowId of connection.windowSubscriptions) {
       this.windowManager.detachPty(windowId);
+
+      // Cancel any pending resize timer for this window (prevents leaked timer after disconnect)
+      const pendingResize = this.pendingResizes.get(windowId);
+      if (pendingResize) {
+        clearTimeout(pendingResize.timer);
+        this.pendingResizes.delete(windowId);
+      }
     }
 
     this.connections.delete(connectionId);

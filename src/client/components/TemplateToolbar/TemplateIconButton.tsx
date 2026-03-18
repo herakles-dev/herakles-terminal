@@ -17,9 +17,10 @@ interface TemplateIconButtonProps {
   categoryId: string;
   templates: Template[];
   onExecute: (command: string) => void;
+  highlight?: boolean;
 }
 
-export function TemplateIconButton({ icon, label, categoryId, templates, onExecute }: TemplateIconButtonProps) {
+export function TemplateIconButton({ icon, label, categoryId, templates, onExecute, highlight }: TemplateIconButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
   const [variableInputs, setVariableInputs] = useState<Record<string, Record<string, string>>>({});
@@ -138,7 +139,9 @@ export function TemplateIconButton({ icon, label, categoryId, templates, onExecu
         className={`p-1.5 rounded-md transition-all duration-150 ${
           isOpen
             ? 'text-[#00d4ff] bg-[#00d4ff]/10 shadow-[0_0_8px_rgba(0,212,255,0.15)]'
-            : 'text-[#71717a] hover:text-[#a1a1aa] hover:bg-white/[0.04]'
+            : highlight
+              ? 'text-[#00d4ff]/70 hover:text-[#00d4ff] hover:bg-[#00d4ff]/5 drop-shadow-[0_0_4px_rgba(0,212,255,0.3)]'
+              : 'text-[#71717a] hover:text-[#a1a1aa] hover:bg-white/[0.04]'
         }`}
         title={label}
       >
@@ -158,14 +161,18 @@ export function TemplateIconButton({ icon, label, categoryId, templates, onExecu
             <span className="ml-2 text-[10px] text-[#3f3f46]">{categoryTemplates.length}</span>
           </div>
           <div className="p-1.5">
-            {categoryTemplates.map(template => (
+            {categoryTemplates.map((template, idx) => (
               <div key={template.id}>
                 <button
                   onClick={() => handleTemplateClick(template)}
-                  className="w-full text-left px-2.5 py-2 rounded-md hover:bg-[#27272a]/60 transition-colors group"
+                  className={`w-full text-left px-2.5 py-2 rounded-md hover:bg-[#27272a]/60 transition-colors group ${
+                    highlight && idx === 0 ? 'border-l-2 border-[#00d4ff] pl-2' : ''
+                  }`}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-[12px] text-[#d4d4d8] group-hover:text-[#00d4ff] transition-colors font-medium truncate flex-1">
+                    <span className={`text-[12px] group-hover:text-[#00d4ff] transition-colors font-medium truncate flex-1 ${
+                      highlight && idx === 0 ? 'text-[#00d4ff]' : 'text-[#d4d4d8]'
+                    }`}>
                       {template.name}
                     </span>
                     {template.variables && template.variables.length > 0 ? (

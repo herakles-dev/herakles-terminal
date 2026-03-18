@@ -1,5 +1,5 @@
 import type { WebGLHealthMonitor } from './WebGLHealthMonitor';
-import { filterThinkingOutput as sharedFilterThinkingOutput } from '@shared/terminalFilters';
+import { filterThinkingOutput as sharedFilterThinkingOutput, filterCarriageReturnThinking } from '@shared/terminalFilters';
 
 export interface OutputPipelineConfig {
   flushIntervalMs?: number;
@@ -22,6 +22,10 @@ const LIGHT_THROTTLE_DELAY = 32;       // ~30fps
 const HEAVY_THROTTLE_DELAY = 100;      // ~10fps
 const CRITICAL_THROTTLE_DELAY = 200;   // ~5fps
 
+// Post-resize suppression window: after resize-pending clears, apply aggressive
+// dot filtering for this duration to catch late-arriving tmux SIGWINCH artifacts.
+const POST_RESIZE_SUPPRESSION_MS = 100;
+
 interface WindowOutputState {
   buffer: string;
   flushTimer: number | null;
@@ -38,6 +42,8 @@ interface WindowOutputState {
   bytesInWindow: number;
   flushCountInWindow: number; // Keep for telemetry
   throttleMode: 'normal' | 'light' | 'heavy' | 'critical';
+  // Post-resize suppression: timestamp when resize-pending was last cleared
+  postResizeSuppressUntil: number;
 }
 
 export type FlushCallback = (windowId: string, data: string) => void;
@@ -46,7 +52,7 @@ export type BackpressureCallback = (windowId: string, throttle: boolean) => void
 
 // Re-export shared filter for backward compatibility
 // (App.tsx imports { filterThinkingOutput } from this module)
-export { filterThinkingOutput } from '@shared/terminalFilters';
+export { filterThinkingOutput, filterCarriageReturnThinking } from '@shared/terminalFilters';
 
 export class OutputPipelineManager {
   private windows: Map<string, WindowOutputState> = new Map();
@@ -117,6 +123,7 @@ export class OutputPipelineManager {
         bytesInWindow: 0,
         flushCountInWindow: 0,
         throttleMode: 'normal',
+        postResizeSuppressUntil: 0,
       };
       this.windows.set(windowId, state);
     }
@@ -233,7 +240,11 @@ export class OutputPipelineManager {
    * Matches the filter in TmuxManager.capturePane() for consistency.
    */
   private filterThinkingOutput(data: string): string {
-    return sharedFilterThinkingOutput(data);
+    // Two-stage filter:
+    // 1. Strip \r-delimited spinner overwrites (⠋ Thinking...\r⠙ Thinking...)
+    // 2. Strip remaining line-based thinking output (dots, braille prefixes)
+    const crFiltered = filterCarriageReturnThinking(data);
+    return sharedFilterThinkingOutput(crFiltered);
   }
 
   enqueue(windowId: string, data: string, seq?: number): void {
@@ -255,7 +266,13 @@ export class OutputPipelineManager {
     }
 
     // Filter Claude thinking output from live data
-    const filtered = this.filterThinkingOutput(data);
+    let filtered = this.filterThinkingOutput(data);
+
+    // Post-resize suppression: aggressively re-filter during the suppression window
+    // to catch late-arriving tmux SIGWINCH dot artifacts
+    if (state.postResizeSuppressUntil > 0 && performance.now() < state.postResizeSuppressUntil) {
+      filtered = this.filterThinkingOutput(filtered);
+    }
 
     if (state.resizePending) {
       state.pendingResizeBuffer += filtered;
@@ -305,11 +322,25 @@ export class OutputPipelineManager {
     const state = this.getOrCreateState(windowId);
     state.resizePending = pending;
 
-    if (!pending && state.pendingResizeBuffer) {
-      state.buffer += state.pendingResizeBuffer;
-      state.pendingResizeBuffer = '';
-      if (state.buffer) {
-        this.scheduleFlush(windowId);
+    if (!pending) {
+      // Start post-resize suppression window — aggressively filter dots for 100ms
+      state.postResizeSuppressUntil = performance.now() + POST_RESIZE_SUPPRESSION_MS;
+
+      if (state.pendingResizeBuffer) {
+        // FIX B (strengthened): Double-filter resize buffer before merging.
+        // First pass catches complete thinking lines, second pass catches fragments
+        // that only form dot patterns after reassembly from partial chunks.
+        const firstPass = this.filterThinkingOutput(state.pendingResizeBuffer);
+        state.buffer += this.filterThinkingOutput(firstPass);
+        state.pendingResizeBuffer = '';
+        if (state.buffer) {
+          // Immediate flush after resize — bypass volume-based throttle to avoid
+          // 100-200ms delay when terminal is in heavy/critical output mode.
+          this.cancelFlushTimer(state);
+          state.flushTimer = requestAnimationFrame(() => {
+            this.performFlush(windowId);
+          });
+        }
       }
     }
   }
@@ -435,6 +466,7 @@ export class OutputPipelineManager {
     state.recoveryInProgress = false;
     state.throttleMode = 'normal';
     state.bytesInWindow = 0;
+    state.postResizeSuppressUntil = 0;
     state.flushCountInWindow = 0;
     state.windowStartTime = performance.now();
     // Preserve lastProcessedSeq for potential reconnect replay
