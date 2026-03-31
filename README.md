@@ -2,7 +2,7 @@
 
 > A resilient, mobile-first web terminal for Claude Code power users
 
-**Version:** 1.1.0 | **Status:** ✅ Production Ready - Media Windows Integration
+**Version:** 1.2.0 | **Status:** ✅ Production Ready - Team Cockpit + Grid Layout
 
 Zeus Terminal is a self-hosted web-based terminal that replaces Termux for remote SSH access. It provides:
 
@@ -61,7 +61,7 @@ npm run build
 # Start
 npm start
 
-# Access at https://zeus.herakles.dev (via Cloudflare Tunnel)
+# Access at https://terminal.herakles.dev (via Cloudflare Tunnel)
 ```
 
 ---
@@ -124,7 +124,7 @@ See `.env.example` for all options.
 
 **v1.0.0 (February 12, 2026)** - Production Feature Complete ✅
 - 7 major features shipped (template toolbar, welcome page, token tracking, enhanced tasks, dockable player, fullscreen canvas, artifact history)
-- 345/345 tests passing (+137 new tests)
+- 320/320 tests passing (+137 new tests)
 - V9 Agent Teams formation execution (4.5 hours)
 - Zero regressions, TypeScript strict mode maintained
 
@@ -282,6 +282,8 @@ Private - Hercules Platform
 
 ---
 
-**Last Updated:** February 26, 2026
-**Version:** 1.1.0
+**Last Updated:** March 31, 2026
+**Version:** 1.2.0
 **Author:** Hercules <noreply@herakles.dev>
+
+<!-- Validated: 2026-03-31 by v11-drift -->

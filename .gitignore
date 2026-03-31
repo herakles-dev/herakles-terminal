@@ -62,3 +62,13 @@ test-results/
 .backups/
 *.tar.gz
 *.zip
+
+# Drift prevention (v11-drift)
+*.tmp
+*.bak
+*.orig
+scratch/
+.tmp/
+__pycache__/
+*.pyc
+.drift-report.json

@@ -27,7 +27,7 @@ services:
     labels:
       - "com.hercules.service=zeus-terminal"
       - "com.hercules.port=8096"
-      - "com.hercules.subdomain=zeus.herakles.dev"
+      - "com.hercules.subdomain=terminal.herakles.dev"
       - "prometheus.scrape=true"
       - "prometheus.port=8096"
       - "prometheus.path=/api/metrics"

@@ -19,8 +19,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "db:migrate": "tsx src/server/utils/migrate.ts",
-    "db:backup": "tsx scripts/backup-db.ts"
+    "db:migrate": "node -e \"require('./dist/server/session/SessionStore.js')\" && echo 'Migrations run via SessionStore.init()'",
+    "db:backup": "cp data/zeus.db data/zeus.db.backup.$(date +%s) && echo 'Backup created'"
   },
   "dependencies": {
     "@types/dompurify": "^3.0.5",
