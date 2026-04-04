@@ -242,17 +242,20 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
           WebkitBackdropFilter: 'blur(16px) saturate(1.4)',
           borderTop: '1px solid rgba(255, 255, 255, 0.06)',
           boxShadow: '0 -4px 24px rgba(0, 0, 0, 0.4)',
-          touchAction: 'none',
+          touchAction: 'pan-x',
         }}
       >
-        {/* Quick keys row */}
+        {/* Quick keys row — horizontally scrollable via touch drag */}
         <div
           style={{
             display: 'flex',
             gap: 4,
             paddingBottom: 4,
             overflowX: 'auto',
+            overflowY: 'hidden',
             scrollbarWidth: 'none',
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-x',
             msOverflowStyle: 'none',
           }}
         >
