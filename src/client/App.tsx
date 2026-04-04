@@ -2007,7 +2007,7 @@ export default function App() {
   const toolbarContent = (
     <>
       <div className="flex items-center gap-2 sm:gap-3">
-        <span className="text-[10px] text-[#52525b] font-mono">v0.2.0</span>
+        <span className="text-[10px] text-[#52525b] font-mono">v2.2</span>
         <ConnectionStatus 
           state={connectionState} 
           sessionId={sessionId} 
@@ -2022,7 +2022,7 @@ export default function App() {
           <span>panel</span>
         </div>
       </div>
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
         <TemplateToolbar
           onExecuteCommand={handleExecuteCommand}
         />
@@ -2034,13 +2034,14 @@ export default function App() {
           totalCount={canvasArtifacts.length}
           onOpen={() => setCanvasViewerOpen(true)}
         /></span>
+        {/* QuickKeys toggle — desktop only (FloatingInput replaces it on mobile) */}
         <button
           onClick={(e) => { e.stopPropagation(); setQuickKeysVisible(!quickKeysVisible); }}
           onMouseDown={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
-          className={`p-2 rounded-lg transition-all duration-200 border ${
-            quickKeysVisible 
-              ? 'bg-gradient-to-br from-[#00d4ff]/20 to-[#8b5cf6]/10 text-[#00d4ff] shadow-[0_0_16px_rgba(0,212,255,0.15)] border-[#00d4ff]/25' 
+          className={`hidden sm:flex p-2 rounded-lg transition-all duration-200 border ${
+            quickKeysVisible
+              ? 'bg-gradient-to-br from-[#00d4ff]/20 to-[#8b5cf6]/10 text-[#00d4ff] shadow-[0_0_16px_rgba(0,212,255,0.15)] border-[#00d4ff]/25'
               : 'text-[#71717a] hover:text-white hover:bg-white/[0.06] border-transparent hover:border-white/[0.06]'
           }`}
           title="Toggle quick keys"
@@ -2101,14 +2102,10 @@ export default function App() {
         onDismissWarning={stopProtocol.dismissWarning}
       />
       {toolbarVisible ? (
-        <div className="relative flex items-center justify-between select-none px-4 sm:px-5 py-2.5 border-b border-white/[0.04] bg-gradient-to-r from-[#07070c]/95 via-[#0c0c14]/95 to-[#07070c]/95 backdrop-blur-xl overflow-visible shadow-[0_4px_24px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.03)]">
+        <div className="relative flex items-center justify-between select-none px-2 sm:px-5 py-2 sm:py-2.5 border-b border-white/[0.04] bg-gradient-to-r from-[#07070c]/95 via-[#0c0c14]/95 to-[#07070c]/95 backdrop-blur-xl overflow-hidden shadow-[0_4px_24px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.03)]">
           <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />
           {toolbarContent}
-          <div className="flex items-center gap-1.5">
-            {/* Mobile-only template hamburger (moved here so it's not occluded by toolbarContent) */}
-            <div className="sm:hidden">
-              <TemplateToolbar onExecuteCommand={handleExecuteCommand} mobileOnly />
-            </div>
+          <div className="flex items-center gap-1 flex-shrink-0">
             {/* Mobile-only tasks toggle */}
             <button
               onClick={(e) => { e.stopPropagation(); setTodoPanelExpanded(prev => !prev); }}
