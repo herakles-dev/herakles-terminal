@@ -13,8 +13,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
-import { THEMES, getTheme } from '@shared/constants';
-import { TERMINAL_DEFAULTS } from '@shared/constants';
+import { THEMES, getTheme, TERMINAL_DEFAULTS, MOBILE_CONSTANTS } from '@shared/constants';
 import { ScreenBuffer, CharPool, StylePool } from '../../renderer/ScreenBuffer.js';
 import { DomRenderer } from '../../renderer/DomRenderer.js';
 import { TerminalCursor } from '../../renderer/Cursor.js';
@@ -23,6 +22,10 @@ import type { TerminalCoreProps, TerminalCoreHandle } from '../TerminalCore/Term
 import type { FitAddon } from '@xterm/addon-fit';
 
 const PADDING = 4;
+// Debounce delay for ResizeObserver: coalesces rapid container size changes during
+// SplitView divider drag into a single resize. 80ms matches the server drain delay
+// (RC-1) and avoids spamming the server with mid-drag resize messages.
+const RESIZE_DEBOUNCE_MS = 80;
 
 export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
   (props, ref) => {
@@ -49,6 +52,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     const dirtyFullRef = useRef(true); // first render is always full
     const scheduleRenderRef = useRef<(() => void) | null>(null);
     const cleanupRef = useRef<(() => void) | null>(null);
+    const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
       const outer = outerRef.current;
@@ -113,11 +117,27 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         cursor.setBlink(true);
         cursorRef.current = cursor;
 
-        // --- Textarea for keyboard input (on top) ---
+        // --- Textarea for keyboard input (on top, desktop only) ---
+        // On mobile, MobileInputHandler (a sibling in App.tsx) handles all input via
+        // onData. Reparenting xterm's textarea into the visible layer on mobile causes
+        // double input: both xterm's internal onData AND MobileInputHandler's onInput
+        // fire for every keystroke, producing duplicated characters.
+        // Fix: on mobile we leave the textarea inside hiddenContainer (pointer-events:none)
+        // so it is invisible to the virtual keyboard. MobileInputHandler is the sole
+        // input path on mobile.
+        const isMobileDevice = /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent)
+          || navigator.maxTouchPoints > 0 && window.innerWidth < MOBILE_CONSTANTS.breakpoint;
         const textarea = hiddenContainer.querySelector('textarea');
         if (textarea) {
-          textarea.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;z-index:30;cursor:text;pointer-events:auto';
-          visibleContainer.appendChild(textarea);
+          if (isMobileDevice) {
+            // Keep textarea hidden — disable pointer-events so the virtual keyboard
+            // cannot attach to it and trigger xterm's internal input pipeline.
+            textarea.style.cssText = 'position:absolute;width:0;height:0;opacity:0;pointer-events:none';
+          } else {
+            // Desktop: reparent into visible layer so xterm captures keyboard focus.
+            textarea.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;z-index:30;cursor:text;pointer-events:auto';
+            visibleContainer.appendChild(textarea);
+          }
         }
 
         const handleOuterClick = () => term.focus();
@@ -195,7 +215,12 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         const bufferChangeDisposable = term.buffer.onBufferChange(() => scheduleFullRender());
 
         // --- ResizeObserver ---
-        const resizeObserver = new ResizeObserver(() => {
+        // Debounced to coalesce rapid container changes during SplitView drag.
+        // Without debouncing, each pixel-level size change during drag fires a
+        // term.resize() + onResize(), spamming the server with mid-drag resizes
+        // and causing repeated output-buffer holds. The debounce matches RC-1's
+        // 80ms drain delay so the final settled size is what gets sent.
+        const applyResize = () => {
           const t = termRef.current;
           if (!t || !outer) return;
 
@@ -209,6 +234,16 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             scheduleFullRender();
             onResize?.(dims.cols, dims.rows);
           }
+        };
+
+        const resizeObserver = new ResizeObserver(() => {
+          if (resizeDebounceRef.current !== null) {
+            clearTimeout(resizeDebounceRef.current);
+          }
+          resizeDebounceRef.current = setTimeout(() => {
+            resizeDebounceRef.current = null;
+            applyResize();
+          }, RESIZE_DEBOUNCE_MS);
         });
         resizeObserver.observe(outer);
 
@@ -222,6 +257,10 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         cleanupRef.current = () => {
           outer.removeEventListener('click', handleOuterClick);
           resizeObserver.disconnect();
+          if (resizeDebounceRef.current !== null) {
+            clearTimeout(resizeDebounceRef.current);
+            resizeDebounceRef.current = null;
+          }
           renderDisposable.dispose();
           cursorDisposable.dispose();
           dataDisposable.dispose();

@@ -1076,7 +1076,11 @@ export default function App() {
   // v2 (WindowGrid): ResizeObserver handles this automatically — no timer needed.
   const panelResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (USE_GRID_LAYOUT) return; // v2: ResizeObserver handles panel-triggered resizes
+    // v2 (WindowGrid) and DOM renderer: ResizeObserver handles panel-triggered resizes.
+    // DOM renderer's own ResizeObserver fires when the panel changes container size,
+    // so triggerResize() (which only acts on fitAddon targets) is a no-op and the
+    // 2000ms safety timer would hold output longer than needed.
+    if (USE_GRID_LAYOUT || USE_DOM_RENDERER) return;
     // Buffer output immediately when panel changes — covers the 16ms gap before triggerResize.
     // H3: Only set if terminals exist. Arm safety timer directly (not via onResizeStart)
     // to handle the edge case where cleanup cancels the 16ms timer before triggerResize fires.
@@ -1125,6 +1129,15 @@ export default function App() {
       return;
     }
 
+    // DOM renderer: ResizeObserver in DomTerminalCore fires automatically when the
+    // container changes size. The coordinator path (resizeTarget → fitAddon.fit) is
+    // a no-op for DOM windows since they never register with useResizeCoordinator.
+    // Skip the early-pending arm and coordinator call entirely — output buffering is
+    // handled by handleTerminalResize when the ResizeObserver fires.
+    if (USE_DOM_RENDERER) {
+      return;
+    }
+
     // H2: Set resize pending for this specific window BEFORE the 250ms delay.
     // resizeTarget() bypasses triggerResize/onResizeStart, so the early pending
     // mechanism wouldn't activate on this path otherwise.
@@ -1159,18 +1172,24 @@ export default function App() {
       const prev = resizeSeqRef.current.get(windowId) ?? 0;
       const seq = prev + 1;
       resizeSeqRef.current.set(windowId, seq);
-      // RC-4: Reset two-flag gate for this resize cycle
-      const oldGate = resizeGateRef.current.get(windowId);
-      if (oldGate?.safetyTimer) clearTimeout(oldGate.safetyTimer);
-      const safetyTimer = setTimeout(() => {
-        // Safety: release buffer if canvas verify or server ack never arrives
-        const gate = resizeGateRef.current.get(windowId);
-        if (gate && (!gate.serverAcked || !gate.canvasVerified)) {
-          resizeGateRef.current.delete(windowId);
-          outputPipelineRef.current?.setResizePending(windowId, false);
-        }
-      }, 200);
-      resizeGateRef.current.set(windowId, { serverAcked: false, canvasVerified: false, safetyTimer });
+      // RC-4: Two-flag gate (serverAcked + canvasVerified) is only meaningful for the
+      // USE_GRID_LAYOUT path where onCanvasVerified is wired through gridResize.register.
+      // DOM renderer (USE_DOM_RENDERER && !USE_GRID_LAYOUT) uses the simpler v1 ack path:
+      // window:resized → confirmResize + 80ms timer. Skip gate creation to avoid the
+      // 200ms safety timer firing a redundant setResizePending(false) on every resize.
+      if (!USE_DOM_RENDERER) {
+        const oldGate = resizeGateRef.current.get(windowId);
+        if (oldGate?.safetyTimer) clearTimeout(oldGate.safetyTimer);
+        const safetyTimer = setTimeout(() => {
+          // Safety: release buffer if canvas verify or server ack never arrives
+          const gate = resizeGateRef.current.get(windowId);
+          if (gate && (!gate.serverAcked || !gate.canvasVerified)) {
+            resizeGateRef.current.delete(windowId);
+            outputPipelineRef.current?.setResizePending(windowId, false);
+          }
+        }, 200);
+        resizeGateRef.current.set(windowId, { serverAcked: false, canvasVerified: false, safetyTimer });
+      }
       sendMessage({ type: 'window:resize', windowId, cols, rows, seq });
     };
 
