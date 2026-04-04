@@ -20,6 +20,7 @@ import { TerminalCore } from './components/TerminalCore';
 import type { TerminalCoreHandle } from './components/TerminalCore';
 import { DomTerminalCore } from './components/DomTerminalCore';
 import { MobileInputHandler } from './components/MobileInputHandler';
+import { FloatingInput } from './components/FloatingInput';
 import { LightningOverlay } from './components/LightningOverlay';
 import { ProjectNavigator } from './components/ProjectNavigator';
 import { FileDropZone } from './components/FileDropZone';
@@ -1471,11 +1472,14 @@ export default function App() {
             }}
           />
         )}
-        <MobileInputHandler
-          onInput={handleTerminalData}
-          enabled={isMobile && isFocused}
-          windowId={windowId}
-        />
+        {/* FloatingInput replaces MobileInputHandler on mobile — visible command bar above keyboard */}
+        {!isMobile && (
+          <MobileInputHandler
+            onInput={handleTerminalData}
+            enabled={false}
+            windowId={windowId}
+          />
+        )}
       </div>
     );
   }, [fontSize, isMobile, sendMessage, toast]);
@@ -2273,9 +2277,20 @@ export default function App() {
         />
       </div>
 
-      {quickKeysVisible && (
+      {/* Mobile: FloatingInput replaces QuickKeyBar sidebar — visible command bar above keyboard */}
+      {isMobile ? (
+        <FloatingInput
+          onInput={(data) => {
+            if (activeWindowId) {
+              sendMessage({ type: 'input', windowId: activeWindowId, data });
+            }
+          }}
+          enabled={!showWelcome}
+          windowId={activeWindowId ?? ''}
+        />
+      ) : quickKeysVisible ? (
         <QuickKeyBar onKey={handleQuickKey} visible={quickKeysVisible} onClose={() => setQuickKeysVisible(false)} onClear={handleClearLine} onRefocus={handleRefocusTerminal} />
-      )}
+      ) : null}
       
       {isLoading && (
         <LoadingOverlay message="Loading session..." fullScreen />
