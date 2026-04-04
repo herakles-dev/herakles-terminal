@@ -41,14 +41,26 @@ import type { DomRenderer } from './DomRenderer.js';
 // Reduces blank-row flicker during rapid scrolling.
 export const OVERSCAN = 5;
 
-// Minimum scrollbar thumb height in pixels
-const MIN_THUMB_PX = 20;
+// Minimum scrollbar thumb height in pixels — raised to 44px for touch targets
+const MIN_THUMB_PX = 44;
+
+// Scrollbar track width for touch hit area (visual thumb remains at 6px inside)
+const SCROLLBAR_TRACK_WIDTH = 44;
+const SCROLLBAR_THUMB_WIDTH = 6;
 
 // Wheel scroll sensitivity: lines per 100px of deltaY
 const WHEEL_LINES_PER_100PX = 3;
 
 // Passive wheel threshold: if |deltaY| < this px, treat as one-line scroll
 const WHEEL_SMALL_DELTA_PX = 50;
+
+// Touch momentum constants
+const TOUCH_MOMENTUM_DECAY = 0.85;
+const TOUCH_MOMENTUM_MIN_VELOCITY = 0.3;
+const TOUCH_MOMENTUM_SCALE = 0.08;
+
+// Duration to keep scrollbar visible after last touch event (ms)
+const TOUCH_SCROLLBAR_HIDE_DELAY_MS = 1500;
 
 export interface VirtualScrollerOptions {
   /** Current viewport height in rows */
@@ -87,12 +99,25 @@ export class VirtualScroller {
   private scrollbarDragStartY = 0;
   private scrollbarDragStartOffset = 0;
 
+  // Touch scroll state
+  private touchStartY = 0;
+  private touchPrevY = 0;
+  private touchPrevDeltaLines = 0;
+  private touchVelocity = 0;
+  private touchMomentumRaf: number | null = null;
+  private touchScrollbarHideTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Bound event handlers for cleanup
   private boundWheel: (e: WheelEvent) => void;
   private boundScrollbarPointerDown: (e: PointerEvent) => void;
   private boundScrollbarPointerMove: (e: PointerEvent) => void;
   private boundScrollbarPointerUp: (e: PointerEvent) => void;
   private _boundKeyDown: (e: KeyboardEvent) => void;
+  private boundTouchStart: (e: TouchEvent) => void;
+  private boundTouchMove: (e: TouchEvent) => void;
+  private boundTouchEnd: (e: TouchEvent) => void;
+  private boundMouseEnter: () => void;
+  private boundMouseLeave: () => void;
 
   // Dirty rows from last scroll step (for recycling optimisation)
   private dirtyFromScroll: Set<number> | null = null;
@@ -107,6 +132,11 @@ export class VirtualScroller {
     this.boundScrollbarPointerMove = this.onScrollbarPointerMove.bind(this);
     this.boundScrollbarPointerUp = this.onScrollbarPointerUp.bind(this);
     this._boundKeyDown = this.handleKeyDown.bind(this);
+    this.boundTouchStart = this.onTouchStart.bind(this);
+    this.boundTouchMove = this.onTouchMove.bind(this);
+    this.boundTouchEnd = this.onTouchEnd.bind(this);
+    this.boundMouseEnter = this.onMouseEnter.bind(this);
+    this.boundMouseLeave = this.onMouseLeave.bind(this);
 
     this.buildScrollbar();
     this.attachEvents();
@@ -295,6 +325,11 @@ export class VirtualScroller {
    * Lifecycle: detach events, remove DOM elements.
    */
   dispose(): void {
+    this.cancelMomentum();
+    if (this.touchScrollbarHideTimer !== null) {
+      clearTimeout(this.touchScrollbarHideTimer);
+      this.touchScrollbarHideTimer = null;
+    }
     this.detachEvents();
     this.scrollbarEl?.remove();
     this.scrollbarEl = null;
@@ -315,7 +350,7 @@ export class VirtualScroller {
       'right:0',
       'top:0',
       'bottom:0',
-      'width:6px',
+      `width:${SCROLLBAR_TRACK_WIDTH}px`,
       'z-index:20',
       'opacity:0',
       'transition:opacity 0.2s',
@@ -327,13 +362,14 @@ export class VirtualScroller {
     thumb.className = 'dom-term-scrollbar-thumb';
     thumb.style.cssText = [
       'position:absolute',
-      'right:0',
-      'width:6px',
+      `right:0`,
+      `width:${SCROLLBAR_THUMB_WIDTH}px`,
+      `margin-right:${(SCROLLBAR_TRACK_WIDTH - SCROLLBAR_THUMB_WIDTH) / 2}px`,
       'border-radius:3px',
       'background:rgba(128,128,128,0.5)',
       'cursor:pointer',
       'transition:background 0.1s',
-      'min-height:20px',
+      `min-height:${MIN_THUMB_PX}px`,
     ].join(';');
 
     scrollbar.appendChild(thumb);
@@ -341,18 +377,6 @@ export class VirtualScroller {
 
     this.scrollbarEl = scrollbar;
     this.thumbEl = thumb;
-
-    // Show scrollbar on hover
-    this.container.addEventListener('mouseenter', () => {
-      if (this.totalLines > this.viewportRows) {
-        scrollbar.style.opacity = '1';
-      }
-    });
-    this.container.addEventListener('mouseleave', () => {
-      if (!this.scrollbarDragging) {
-        scrollbar.style.opacity = '0';
-      }
-    });
   }
 
   private updateScrollbar(): void {
@@ -382,6 +406,130 @@ export class VirtualScroller {
 
     this.thumbEl.style.height = `${thumbHeight}px`;
     this.thumbEl.style.top = `${Math.max(0, Math.min(trackHeight, thumbTop))}px`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private — scrollbar visibility helpers
+  // ---------------------------------------------------------------------------
+
+  private showScrollbar(): void {
+    if (!this.scrollbarEl || this.totalLines <= this.viewportRows) return;
+    this.scrollbarEl.style.opacity = '1';
+  }
+
+  private hideScrollbar(): void {
+    if (!this.scrollbarEl || this.scrollbarDragging) return;
+    this.scrollbarEl.style.opacity = '0';
+  }
+
+  private onMouseEnter(): void {
+    this.showScrollbar();
+  }
+
+  private onMouseLeave(): void {
+    this.hideScrollbar();
+  }
+
+  /** Show scrollbar and schedule auto-hide after TOUCH_SCROLLBAR_HIDE_DELAY_MS. */
+  private touchShowScrollbar(): void {
+    this.showScrollbar();
+    if (this.touchScrollbarHideTimer !== null) {
+      clearTimeout(this.touchScrollbarHideTimer);
+    }
+    this.touchScrollbarHideTimer = setTimeout(() => {
+      this.touchScrollbarHideTimer = null;
+      this.hideScrollbar();
+    }, TOUCH_SCROLLBAR_HIDE_DELAY_MS);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private — touch scroll handlers
+  // ---------------------------------------------------------------------------
+
+  private onTouchStart(e: TouchEvent): void {
+    // Ignore multi-touch (pinch-zoom etc.)
+    if (e.touches.length > 1) return;
+
+    const scrollableLines = Math.max(0, this.totalLines - this.viewportRows);
+    if (scrollableLines === 0) return;
+
+    this.cancelMomentum();
+
+    this.touchStartY = e.touches[0].clientY;
+    this.touchPrevY = this.touchStartY;
+    this.touchPrevDeltaLines = 0;
+    this.touchVelocity = 0;
+
+    this.touchShowScrollbar();
+  }
+
+  private onTouchMove(e: TouchEvent): void {
+    if (e.touches.length > 1) return;
+
+    const scrollableLines = Math.max(0, this.totalLines - this.viewportRows);
+    if (scrollableLines === 0) return;
+
+    // Must call preventDefault here to block native page scroll.
+    // Listener is registered with { passive: false }.
+    e.preventDefault();
+
+    const currentY = e.touches[0].clientY;
+    const totalDeltaY = this.touchStartY - currentY;
+    const lineHeight = this.container.clientHeight / Math.max(1, this.viewportRows);
+    const totalDeltaLines = Math.round(totalDeltaY / lineHeight);
+
+    // Incremental delta since last move
+    const incrementalDelta = totalDeltaLines - this.touchPrevDeltaLines;
+
+    // Track velocity for momentum (lines per pixel of finger movement)
+    const pixelDelta = this.touchPrevY - currentY;
+    this.touchVelocity = pixelDelta / lineHeight;
+
+    this.touchPrevY = currentY;
+    this.touchPrevDeltaLines = totalDeltaLines;
+
+    if (incrementalDelta !== 0) {
+      this.scrollBy(incrementalDelta);
+      this.touchShowScrollbar();
+    }
+  }
+
+  private onTouchEnd(_e: TouchEvent): void {
+    // Apply momentum if velocity is above threshold
+    if (Math.abs(this.touchVelocity) > TOUCH_MOMENTUM_MIN_VELOCITY) {
+      this.startMomentum(this.touchVelocity);
+    }
+    this.touchShowScrollbar();
+  }
+
+  private startMomentum(initialVelocity: number): void {
+    let velocity = initialVelocity;
+
+    const step = () => {
+      // Decay velocity
+      velocity *= TOUCH_MOMENTUM_DECAY;
+
+      if (Math.abs(velocity) < TOUCH_MOMENTUM_MIN_VELOCITY) {
+        this.touchMomentumRaf = null;
+        return;
+      }
+
+      const deltaLines = Math.round(velocity * TOUCH_MOMENTUM_SCALE * 100);
+      if (deltaLines !== 0) {
+        this.scrollBy(deltaLines);
+      }
+
+      this.touchMomentumRaf = requestAnimationFrame(step);
+    };
+
+    this.touchMomentumRaf = requestAnimationFrame(step);
+  }
+
+  private cancelMomentum(): void {
+    if (this.touchMomentumRaf !== null) {
+      cancelAnimationFrame(this.touchMomentumRaf);
+      this.touchMomentumRaf = null;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -436,6 +584,11 @@ export class VirtualScroller {
   private attachEvents(): void {
     this.container.addEventListener('wheel', this.boundWheel, { passive: false });
     this.container.addEventListener('keydown', this._boundKeyDown);
+    this.container.addEventListener('mouseenter', this.boundMouseEnter);
+    this.container.addEventListener('mouseleave', this.boundMouseLeave);
+    this.container.addEventListener('touchstart', this.boundTouchStart, { passive: true });
+    this.container.addEventListener('touchmove', this.boundTouchMove, { passive: false });
+    this.container.addEventListener('touchend', this.boundTouchEnd, { passive: true });
 
     if (this.thumbEl) {
       this.thumbEl.addEventListener('pointerdown', this.boundScrollbarPointerDown);
@@ -447,6 +600,11 @@ export class VirtualScroller {
   private detachEvents(): void {
     this.container.removeEventListener('wheel', this.boundWheel);
     this.container.removeEventListener('keydown', this._boundKeyDown);
+    this.container.removeEventListener('mouseenter', this.boundMouseEnter);
+    this.container.removeEventListener('mouseleave', this.boundMouseLeave);
+    this.container.removeEventListener('touchstart', this.boundTouchStart);
+    this.container.removeEventListener('touchmove', this.boundTouchMove);
+    this.container.removeEventListener('touchend', this.boundTouchEnd);
 
     if (this.thumbEl) {
       this.thumbEl.removeEventListener('pointerdown', this.boundScrollbarPointerDown);

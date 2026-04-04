@@ -9,6 +9,17 @@
   contain: layout paint;
   white-space: pre;
   cursor: text;
+  /* Prevent native touch-scroll so VirtualScroller can intercept touchmove */
+  touch-action: none;
+  /* Prevent scroll chaining to parent on overscroll */
+  overscroll-behavior: contain;
+}
+
+/* On touch-only devices (no hover), keep scrollbar faintly visible as a hint */
+@media (hover: none) {
+  .dom-term-scrollbar {
+    opacity: 0.15 !important;
+  }
 }
 
 .dom-term-rows {

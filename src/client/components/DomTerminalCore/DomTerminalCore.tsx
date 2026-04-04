@@ -65,6 +65,9 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     const scheduleRenderRef = useRef<(() => void) | null>(null);
     const cleanupRef = useRef<(() => void) | null>(null);
     const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Persists the mobile-detection result across the component lifetime so that
+    // useCallback / useImperativeHandle callsites outside init() can check it.
+    const isMobileRef = useRef(false);
     // VirtualScroller — manages scrollback viewport offset and scrollbar
     const virtualScrollerRef = useRef<VirtualScroller | null>(null);
     // Reference to the .dom-term-viewport element so setTheme() can update CSS variables
@@ -78,8 +81,11 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
     const handleSearchClose = useCallback(() => {
       setSearchVisible(false);
-      // Return focus to the terminal after closing search
-      requestAnimationFrame(() => termRef.current?.focus());
+      // Return focus to the terminal after closing search (desktop only —
+      // on mobile MobileInputHandler manages focus independently).
+      if (!isMobileRef.current) {
+        requestAnimationFrame(() => termRef.current?.focus());
+      }
     }, []);
 
     useEffect(() => {
@@ -141,7 +147,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // --- Rows container (below textarea) ---
         const rowsContainer = document.createElement('div');
         rowsContainer.className = 'dom-term-rows';
-        rowsContainer.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none';
+        rowsContainer.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:auto';
         visibleContainer.appendChild(rowsContainer);
 
         const renderer = new DomRenderer(rowsContainer);
@@ -178,6 +184,9 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         const isMobileDevice =
           /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
           (navigator.maxTouchPoints > 0 && window.innerWidth < MOBILE_CONSTANTS.breakpoint);
+        // Persist so useCallback / useImperativeHandle callsites can guard focus calls.
+        isMobileRef.current = isMobileDevice;
+
         const textarea = hiddenContainer.querySelector('textarea');
         if (textarea) {
           if (isMobileDevice) {
@@ -193,9 +202,16 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           }
         }
 
-        const handleOuterClick = () => term.focus();
+        // On mobile, skip term.focus() entirely — MobileInputHandler manages focus.
+        // Calling term.focus() on mobile would summon the virtual keyboard via
+        // xterm's hidden textarea.
+        const handleOuterClick = () => {
+          if (!isMobileRef.current) term.focus();
+        };
         outer.addEventListener('click', handleOuterClick);
-        requestAnimationFrame(() => term.focus());
+        if (!isMobileDevice) {
+          requestAnimationFrame(() => term.focus());
+        }
 
         // --- Double buffers ---
         const charPool = charPoolRef.current;
@@ -454,7 +470,8 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             }
           }
         },
-        focus: () => termRef.current?.focus(),
+        // On mobile this is a no-op — App.tsx should call MobileInputHandler.focus() instead.
+        focus: () => { if (!isMobileRef.current) termRef.current?.focus(); },
         clear: () => {
           termRef.current?.clear();
           // Snap back to bottom after clear

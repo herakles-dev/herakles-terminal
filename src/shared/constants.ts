@@ -57,6 +57,10 @@ export const QUICK_KEYS = [
   { id: 'down', label: '\u2193', value: '\x1b[B', category: 'navigation' as const },
   { id: 'slash', label: '/', value: '/', category: 'symbol' as const },
   { id: 'tilde', label: '~', value: '~', category: 'symbol' as const },
+  { id: 'ctrl-c', label: '^C', value: '\x03', category: 'signal' as const },
+  { id: 'ctrl-d', label: '^D', value: '\x04', category: 'signal' as const },
+  { id: 'ctrl-z', label: '^Z', value: '\x1a', category: 'signal' as const },
+  { id: 'find', label: 'Find', value: '__FIND__', category: 'navigation' as const },
   { id: 'claude', label: 'Claude', value: 'claude --dangerously-skip-permissions\r', category: 'claude' as const },
 ];
 

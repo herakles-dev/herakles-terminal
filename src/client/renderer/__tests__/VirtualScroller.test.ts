@@ -525,6 +525,158 @@ describe('VirtualScroller', () => {
   });
 
   // -------------------------------------------------------------------------
+  // touch scroll handlers
+  // -------------------------------------------------------------------------
+
+  describe('touch scroll', () => {
+    /** Helper: build a minimal TouchEvent with a single touch point at clientY. */
+    function makeTouchEvent(type: string, clientY: number, touchCount = 1): TouchEvent {
+      const touches: Touch[] = [];
+      for (let i = 0; i < touchCount; i++) {
+        touches.push({ clientY, clientX: 0, identifier: i } as unknown as Touch);
+      }
+      return new TouchEvent(type, {
+        touches,
+        changedTouches: touches,
+        bubbles: true,
+        cancelable: true,
+      });
+    }
+
+    it('touchstart on container with scrollback shows scrollbar', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      // Find the scrollbar element
+      const scrollbar = container.querySelector('.dom-term-scrollbar') as HTMLElement;
+      expect(scrollbar).not.toBeNull();
+
+      const startEvent = makeTouchEvent('touchstart', 300);
+      container.dispatchEvent(startEvent);
+      // Scrollbar should be shown (opacity = '1')
+      expect(scrollbar.style.opacity).toBe('1');
+      scroller.dispose();
+    });
+
+    it('touchstart is ignored on single-line buffer (no scrollback)', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 24 });
+      track(container);
+      const scrollbar = container.querySelector('.dom-term-scrollbar') as HTMLElement;
+
+      const startEvent = makeTouchEvent('touchstart', 300);
+      container.dispatchEvent(startEvent);
+      // No scrollback means scrollbar stays hidden
+      expect(scrollbar.style.opacity).not.toBe('1');
+      scroller.dispose();
+    });
+
+    it('touchstart with multiple touches (pinch) is ignored', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      const initialOffset = scroller.isAtBottom();
+
+      const startEvent = makeTouchEvent('touchstart', 300, 2);
+      container.dispatchEvent(startEvent);
+      // State should be unchanged
+      expect(scroller.isAtBottom()).toBe(initialOffset);
+      scroller.dispose();
+    });
+
+    it('swipe up (finger moves up) scrolls buffer up, increasing offset', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      expect(scroller.isAtBottom()).toBe(true);
+
+      // Mock clientHeight so we get a predictable lineHeight
+      Object.defineProperty(container, 'clientHeight', { value: 480, configurable: true });
+
+      // touchstart at y=400, touchmove to y=360 (finger moves up 40px)
+      // totalDeltaY = 400 - 360 = 40; lineHeight = 480/24 = 20
+      // totalDeltaLines = round(40/20) = 2; scrollBy(2) → offset 0→2
+      container.dispatchEvent(makeTouchEvent('touchstart', 400));
+      container.dispatchEvent(makeTouchEvent('touchmove', 360));
+      expect(scroller.isAtBottom()).toBe(false);
+      // scrollableLines=76, offset=2 → startLine = 76-2 = 74
+      const range = scroller.getViewportRange();
+      expect(range.startLine).toBe(74);
+      scroller.dispose();
+    });
+
+    it('swipe down (finger moves down) scrolls buffer down, decreasing offset', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      // First scroll up so there is room to scroll down
+      scroller.scrollBy(20);
+      expect(scroller.isAtBottom()).toBe(false);
+
+      Object.defineProperty(container, 'clientHeight', { value: 480, configurable: true });
+
+      // touchstart at y=200, touchmove to y=220 (finger moves down 20px)
+      // totalDeltaY = 200 - 220 = -20; lineHeight=20; totalDeltaLines = round(-20/20) = -1
+      // scrollBy(-1) → offset 20→19
+      container.dispatchEvent(makeTouchEvent('touchstart', 200));
+      container.dispatchEvent(makeTouchEvent('touchmove', 220));
+      // scrollableLines=76, offset=19 → startLine = 76-19 = 57
+      const range = scroller.getViewportRange();
+      expect(range.startLine).toBe(57);
+      scroller.dispose();
+    });
+
+    it('touchmove with multiple touches is ignored', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+
+      container.dispatchEvent(makeTouchEvent('touchstart', 300));
+      container.dispatchEvent(makeTouchEvent('touchmove', 200, 2)); // 2-finger move
+      // No scroll should have occurred
+      expect(scroller.isAtBottom()).toBe(true);
+      scroller.dispose();
+    });
+
+    it('touchend does not crash when called after touchstart', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      container.dispatchEvent(makeTouchEvent('touchstart', 300));
+      // Should not throw
+      expect(() => container.dispatchEvent(makeTouchEvent('touchend', 300))).not.toThrow();
+      scroller.dispose();
+    });
+
+    it('dispose cancels any pending momentum animation', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      // Trigger a touchend with enough velocity to start momentum
+      container.dispatchEvent(makeTouchEvent('touchstart', 300));
+      // Simulate rapid move to build velocity
+      container.dispatchEvent(makeTouchEvent('touchmove', 200));
+      container.dispatchEvent(makeTouchEvent('touchend', 200));
+      // dispose must not throw even if RAF is pending
+      expect(() => scroller.dispose()).not.toThrow();
+    });
+
+    it('mouseenter shows scrollbar when scrollback exists', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      const scrollbar = container.querySelector('.dom-term-scrollbar') as HTMLElement;
+
+      container.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      expect(scrollbar.style.opacity).toBe('1');
+      scroller.dispose();
+    });
+
+    it('mouseleave hides scrollbar', () => {
+      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
+      track(container);
+      const scrollbar = container.querySelector('.dom-term-scrollbar') as HTMLElement;
+
+      container.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      expect(scrollbar.style.opacity).toBe('1');
+      container.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+      expect(scrollbar.style.opacity).toBe('0');
+      scroller.dispose();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // setTerminal
   // -------------------------------------------------------------------------
 

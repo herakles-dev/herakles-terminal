@@ -17,7 +17,9 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
     const lastSentRef = useRef('');
     const processingRef = useRef(false);
     const prevWindowIdRef = useRef(windowId);
-    
+    // IME composition state — CJK input must not flush mid-composition
+    const composingRef = useRef(false);
+
     useEffect(() => {
       if (prevWindowIdRef.current !== windowId) {
         if (inputRef.current) {
@@ -38,7 +40,8 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
       }
     }, [enabled]);
 
-    // Prevent iOS pull-to-refresh when swiping down from top
+    // Prevent iOS pull-to-refresh when swiping down from top.
+    // Scoped to avoid blocking VirtualScroller's scroll inside .dom-term-viewport.
     useEffect(() => {
       if (!enabled) return;
 
@@ -47,6 +50,9 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
         startY = e.touches[0]?.clientY ?? 0;
       };
       const handleTouchMove = (e: TouchEvent) => {
+        // Don't block swipes inside the terminal viewport — VirtualScroller handles those
+        if ((e.target as HTMLElement)?.closest?.('.dom-term-viewport')) return;
+
         const currentY = e.touches[0]?.clientY ?? 0;
         const isSwipingDown = currentY > startY;
         // Only block downward swipe when page is at scroll top (pull-to-refresh gesture)
@@ -68,32 +74,62 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
       blur: () => inputRef.current?.blur(),
     }));
 
+    // sendNewChars — handles append-only, autocorrect replacements, and paste.
+    // Skipped entirely during IME composition to avoid sending partial CJK syllables.
     const sendNewChars = useCallback(() => {
       const input = inputRef.current;
-      if (!input) return;
-      
+      if (!input || composingRef.current) return;
+
       const current = input.value;
       const lastSent = lastSentRef.current;
-      
-      if (current.length > lastSent.length) {
-        const newChars = current.slice(lastSent.length);
-        onInput(newChars);
-        lastSentRef.current = current;
+
+      if (current === lastSent) return; // no change
+
+      if (current.length > lastSent.length && current.startsWith(lastSent)) {
+        // Append-only: send just the new characters
+        onInput(current.slice(lastSent.length));
+      } else {
+        // Replacement (autocorrect, paste, deletion, etc): delete old, send new.
+        // Emit backspace sequences to erase what the terminal already received,
+        // then send the replacement.
+        const deleteCount = lastSent.length;
+        for (let i = 0; i < deleteCount; i++) {
+          onInput('\x7f');
+        }
+        if (current.length > 0) {
+          onInput(current);
+        }
       }
-      
-      if (current.length > 50) {
+
+      lastSentRef.current = current;
+
+      // Flush buffer when it grows large to avoid unbounded accumulation
+      if (current.length > 200) {
         input.value = '';
         lastSentRef.current = '';
       }
     }, [onInput]);
 
+    // IME composition handlers — CJK (Chinese, Japanese, Korean) input
+    const handleCompositionStart = useCallback(() => {
+      composingRef.current = true;
+    }, []);
+
+    const handleCompositionEnd = useCallback(() => {
+      composingRef.current = false;
+      // Flush the final composed character now that composition is complete
+      sendNewChars();
+    }, [sendNewChars]);
+
     const handleInput = useCallback(() => {
+      // Skip mid-composition events — handleCompositionEnd handles the flush
+      if (composingRef.current) return;
       sendNewChars();
     }, [sendNewChars]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       const input = inputRef.current;
-      
+
       switch (e.key) {
         case 'Enter':
           e.preventDefault();
@@ -174,6 +210,21 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
       }
     }, [sendNewChars]);
 
+    // Paste handler — intercept clipboard paste and route directly to onInput
+    // rather than letting the browser insert text into the input value, which
+    // would trip the autocorrect desync path in sendNewChars.
+    const handlePaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+      e.preventDefault();
+      const text = e.clipboardData.getData('text');
+      if (text) {
+        onInput(text);
+        if (inputRef.current) {
+          inputRef.current.value = '';
+          lastSentRef.current = '';
+        }
+      }
+    }, [onInput]);
+
     if (!enabled) return null;
 
     return (
@@ -205,6 +256,9 @@ export const MobileInputHandler = forwardRef<MobileInputHandlerHandle, MobileInp
         onKeyDown={handleKeyDown}
         onKeyUp={handleKeyUp}
         onBlur={handleBlur}
+        onPaste={handlePaste}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
       />
     );
   }

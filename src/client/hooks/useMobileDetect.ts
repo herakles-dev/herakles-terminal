@@ -30,8 +30,9 @@ function detect(): MobileDetectResult {
   const ua = navigator.userAgent || '';
   const isAndroid = /android/i.test(ua);
   const isIOS = /iphone|ipad|ipod/i.test(ua);
+  const isWebOS = /webOS/i.test(ua);
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const isMobile = isAndroid || isIOS || (isTouchDevice && window.innerWidth < 768);
+  const isMobile = isAndroid || isIOS || isWebOS || (isTouchDevice && window.innerWidth < 768);
 
   return {
     isMobile,

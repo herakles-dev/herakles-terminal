@@ -262,7 +262,7 @@ export interface QuickKey {
   value: string;
   icon?: string;
   longPress?: string;
-  category: 'control' | 'symbol' | 'navigation' | 'claude' | 'modifier';
+  category: 'control' | 'symbol' | 'navigation' | 'claude' | 'modifier' | 'signal';
 }
 
 export interface Command {

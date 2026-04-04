@@ -169,7 +169,7 @@ export function SearchOverlay({ terminalRef, rendererRef, visible, onClose }: Se
 
       const found = searchBuffer(term, q, opts);
       setMatches(found);
-      const next = found.length > 0 ? 0 : 0;
+      const next = 0;
       setActiveIndex(next);
       applyHighlights(found, next);
     },
@@ -259,7 +259,8 @@ export function SearchOverlay({ terminalRef, rendererRef, visible, onClose }: Se
         fontSize: '13px',
         color: '#e2e2e2',
         userSelect: 'none',
-        minWidth: '280px',
+        width: '280px',
+        maxWidth: 'calc(100vw - 16px)',
       }}
     >
       {/* Search input */}

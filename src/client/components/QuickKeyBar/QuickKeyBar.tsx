@@ -63,6 +63,18 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear
       return;
     }
 
+    // Find button — dispatch a synthetic Ctrl+F event on the DOM renderer container
+    if (key.id === 'find') {
+      const termContainer = document.querySelector('[data-renderer="dom"]');
+      if (termContainer) {
+        termContainer.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'f', ctrlKey: true, bubbles: true, cancelable: true,
+        }));
+      }
+      onRefocus?.();
+      return;
+    }
+
     // Apply Ctrl modifier to arrow keys when held
     let value = key.value;
     if (ctrlHeld && CTRL_ARROW[value]) {
@@ -70,6 +82,8 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear
     }
 
     onKey(value);
+    // Auto-reset Ctrl after sending any key (one-shot modifier)
+    setCtrlHeld(false);
     onRefocus?.();
   }, [onKey, triggerHaptic, onRefocus, ctrlHeld]);
 
@@ -87,16 +101,17 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear
 
   if (!visible) return null;
 
-  // Group: modifier | nav keys | arrows | symbols | claude
+  // Group: modifier | nav keys | arrows | symbols | signal | claude
   const ctrlKey = QUICK_KEYS.find(k => k.id === 'ctrl')!;
   const navKeys = QUICK_KEYS.filter(k => k.category === 'navigation' && !['up', 'down', 'left', 'right'].includes(k.id));
   const arrowKeys = QUICK_KEYS.filter(k => ['up', 'down', 'left', 'right'].includes(k.id));
   const symbolKeys = QUICK_KEYS.filter(k => k.category === 'symbol');
+  const signalKeys = QUICK_KEYS.filter(k => k.category === 'signal');
   const claudeKeys = QUICK_KEYS.filter(k => k.category === 'claude');
 
   return (
     <div
-      className="quick-key-bar safe-area-bottom"
+      className="quick-key-bar quick-key-bar-mobile safe-area-bottom"
       style={{ bottom: `${keyboardOffset}px` }}
       onTouchStart={preventFocus}
       onMouseDown={preventFocus}
@@ -163,6 +178,21 @@ export default function QuickKeyBar({ onKey, visible, onClose, onClear: _onClear
           ctrlHeld={false}
         />
       ))}
+
+      {signalKeys.length > 0 && (
+        <>
+          <div className="w-px h-7 bg-[#27272a]/50 flex-shrink-0" />
+          {signalKeys.map(key => (
+            <KeyButton
+              key={key.id}
+              keyConfig={key}
+              onClick={handleClick}
+              onLongPress={handleLongPress}
+              ctrlHeld={false}
+            />
+          ))}
+        </>
+      )}
 
       {claudeKeys.length > 0 && (
         <>
