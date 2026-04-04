@@ -71,22 +71,21 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
     return () => { cancelled = true; };
   }, [visible]);
 
-  // Close mobile menu on outside click (rAF delays listener to avoid same-tick race)
+  // Close mobile menu on outside click/tap
   useEffect(() => {
     if (!mobileOpen) return;
-    const handleClick = (e: Event) => {
+    const handleOutside = (e: Event) => {
       if (mobileRef.current && !mobileRef.current.contains(e.target as Node)) {
         setMobileOpen(false);
       }
     };
+    // Use pointerdown — works for both mouse and touch, avoids touchstart/click race
     const frame = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', handleClick);
-      document.addEventListener('touchstart', handleClick);
+      document.addEventListener('pointerdown', handleOutside);
     });
     return () => {
       cancelAnimationFrame(frame);
-      document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('touchstart', handleClick);
+      document.removeEventListener('pointerdown', handleOutside);
     };
   }, [mobileOpen]);
 
@@ -109,13 +108,13 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
       <button
         onClick={(e) => { e.stopPropagation(); setMobileOpen(prev => !prev); }}
         onMouseDown={(e) => e.stopPropagation()}
-        onTouchStart={(e) => e.stopPropagation()}
-        className={`p-1.5 rounded-md transition-all duration-150 ${
+        className={`p-2.5 rounded-md transition-all duration-150 ${
           mobileOpen
             ? 'text-[#00d4ff] bg-[#00d4ff]/10'
-            : 'text-[#71717a] hover:text-[#a1a1aa]'
+            : 'text-[#71717a] active:text-[#a1a1aa] active:bg-white/[0.06]'
         }`}
         title="Templates"
+        aria-label="Templates menu"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
@@ -123,7 +122,7 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
       </button>
 
       {mobileOpen && (
-        <div className="absolute top-full right-0 mt-2 w-[240px] max-h-[60vh] overflow-y-auto bg-[#0a0a0f] border border-[#27272a] rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-[9999] animate-scale-in">
+        <div className="absolute top-full right-0 mt-2 w-[260px] sm:w-[240px] max-h-[60vh] overflow-y-auto bg-[#0a0a0f]/95 backdrop-blur-lg border border-[#27272a] rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-[9999] animate-scale-in" style={{ touchAction: 'pan-y' }}>
           <div className="p-2">
             {activeCategories.map(cat => {
               const catTemplates = templates.filter(t => t.category === cat.id);
@@ -144,7 +143,7 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
                             handleExecute(t.command + '\r');
                           }
                         }}
-                        className={`w-full text-left px-3 py-1.5 text-[11px] hover:bg-[#27272a]/40 rounded transition-colors flex items-center gap-1.5 ${
+                        className={`w-full text-left px-3 py-2.5 sm:py-1.5 text-[12px] sm:text-[11px] hover:bg-[#27272a]/40 active:bg-[#27272a]/60 rounded transition-colors flex items-center gap-1.5 ${
                           hasVars ? 'text-[#71717a]' : 'text-[#a1a1aa] hover:text-[#00d4ff]'
                         }`}
                       >
@@ -185,7 +184,7 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
         <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent mx-1" />
       </div>
 
-      {/* Mobile: hamburger (sm:hidden; on actual mobile the mobileOnly instance is the clickable one) */}
+      {/* Mobile: hamburger menu (sm:hidden) */}
       {mobileMenu}
     </>
   );

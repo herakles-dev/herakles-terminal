@@ -2065,11 +2065,13 @@ export default function App() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
           </svg>
         </button>
-        <LayoutSelector
-          windowCount={windows.filter(w => !w.isMinimized).length}
-          onSelectLayout={handleApplyLayout}
-          currentLayouts={windows.filter(w => !w.isMinimized).map(w => ({ x: w.x, y: w.y, width: w.width, height: w.height }))}
-        />
+        <span className="hidden sm:inline">
+          <LayoutSelector
+            windowCount={windows.filter(w => !w.isMinimized).length}
+            onSelectLayout={handleApplyLayout}
+            currentLayouts={windows.filter(w => !w.isMinimized).map(w => ({ x: w.x, y: w.y, width: w.width, height: w.height }))}
+          />
+        </span>
       </div>
     </>
   );
@@ -2102,7 +2104,7 @@ export default function App() {
         onDismissWarning={stopProtocol.dismissWarning}
       />
       {toolbarVisible ? (
-        <div className="relative flex items-center justify-between select-none px-2 sm:px-5 py-2 sm:py-2.5 border-b border-white/[0.04] bg-gradient-to-r from-[#07070c]/95 via-[#0c0c14]/95 to-[#07070c]/95 backdrop-blur-xl overflow-hidden shadow-[0_4px_24px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.03)]">
+        <div className="relative flex items-center justify-between select-none px-2 sm:px-5 py-2 sm:py-2.5 border-b border-white/[0.04] bg-gradient-to-r from-[#07070c]/95 via-[#0c0c14]/95 to-[#07070c]/95 backdrop-blur-xl overflow-visible shadow-[0_4px_24px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.03)]">
           <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />
           {toolbarContent}
           <div className="flex items-center gap-1 flex-shrink-0">
