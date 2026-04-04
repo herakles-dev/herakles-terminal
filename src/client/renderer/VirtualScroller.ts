@@ -67,6 +67,8 @@ export interface VirtualScrollerOptions {
   viewportRows: number;
   /** Maximum scrollback lines (default: 5000) */
   maxScrollback?: number;
+  /** Called after scroll position changes — use to trigger re-render */
+  onScrollChange?: () => void;
 }
 
 export interface ViewportRange {
@@ -122,10 +124,14 @@ export class VirtualScroller {
   // Dirty rows from last scroll step (for recycling optimisation)
   private dirtyFromScroll: Set<number> | null = null;
 
+  // Callback to notify DomTerminalCore that scroll position changed and re-render is needed
+  private onScrollChange: (() => void) | null = null;
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   constructor(container: HTMLElement, _renderer: DomRenderer, opts: VirtualScrollerOptions) {
     this.container = container;
     this.viewportRows = opts.viewportRows;
+    this.onScrollChange = opts.onScrollChange ?? null;
 
     this.boundWheel = this.handleWheel.bind(this);
     this.boundScrollbarPointerDown = this.onScrollbarPointerDown.bind(this);
@@ -202,6 +208,7 @@ export class VirtualScroller {
     if (wasAtBottom !== this._isAtBottom || deltaRows !== 0) {
       this.updateScrollbar();
       this.computeRecycledDirtyRows(deltaRows);
+      this.onScrollChange?.();
     }
   }
 
@@ -214,6 +221,7 @@ export class VirtualScroller {
     this._isAtBottom = true;
     this.dirtyFromScroll = null; // need full render
     this.updateScrollbar();
+    this.onScrollChange?.();
   }
 
   /**

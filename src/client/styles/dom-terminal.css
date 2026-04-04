@@ -24,6 +24,10 @@
 
 .dom-term-rows {
   contain: layout;
+  /* Inherit touch-action:none from viewport — touch-action is NOT inherited in CSS,
+     so each touchable element must set it explicitly. Without this, the browser
+     intercepts touch gestures on rows before VirtualScroller's touchmove handler fires. */
+  touch-action: none;
 }
 
 .dom-term-row {
@@ -39,6 +43,7 @@
 
 .dom-term-cursor {
   animation: dom-term-cursor-blink 1s step-end infinite;
+  touch-action: none;
 }
 
 .dom-term-viewport ::selection {

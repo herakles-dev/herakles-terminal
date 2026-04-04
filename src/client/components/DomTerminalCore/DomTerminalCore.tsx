@@ -147,7 +147,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // --- Rows container (below textarea) ---
         const rowsContainer = document.createElement('div');
         rowsContainer.className = 'dom-term-rows';
-        rowsContainer.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:auto';
+        rowsContainer.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:auto;touch-action:none';
         visibleContainer.appendChild(rowsContainer);
 
         const renderer = new DomRenderer(rowsContainer);
@@ -169,6 +169,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         const scroller = new VirtualScroller(visibleContainer, renderer, {
           viewportRows: rows,
           maxScrollback: TERMINAL_DEFAULTS.scrollback,
+          onScrollChange: () => scheduleFullRender(),
         });
         scroller.setTerminal(term);
         virtualScrollerRef.current = scroller;
@@ -510,6 +511,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           minHeight: 0,
           flex: 1,
           overflow: 'hidden',
+          touchAction: 'none',
           backgroundColor: (THEMES[theme] ?? THEMES['dark'])!.background,
         }}
         data-terminal-id={terminalId}

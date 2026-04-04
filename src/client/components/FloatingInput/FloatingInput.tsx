@@ -28,16 +28,23 @@ interface FloatingInputProps {
   windowId: string;
 }
 
-// Inline quick keys — the most essential terminal operations
+// Inline quick keys — all essential terminal operations in a scrollable row
 const INLINE_KEYS = [
-  { id: 'ctrl-c', label: '^C', value: '\x03', title: 'Interrupt' },
+  { id: 'ctrl-c', label: '^C', value: '\x03', title: 'Interrupt', accent: true },
   { id: 'ctrl-d', label: '^D', value: '\x04', title: 'EOF' },
+  { id: 'ctrl-z', label: '^Z', value: '\x1a', title: 'Suspend' },
   { id: 'tab', label: 'Tab', value: '\t', title: 'Tab complete' },
   { id: 'esc', label: 'Esc', value: '\x1b', title: 'Escape' },
   { id: 'up', label: '\u2191', value: '\x1b[A', title: 'History up' },
   { id: 'down', label: '\u2193', value: '\x1b[B', title: 'History down' },
-  { id: 'find', label: '\u{1F50D}', value: '__FIND__', title: 'Search' },
-];
+  { id: 'left', label: '\u2190', value: '\x1b[D', title: 'Cursor left' },
+  { id: 'right', label: '\u2192', value: '\x1b[C', title: 'Cursor right' },
+  { id: 'shift-tab', label: '\u21E7Tab', value: '\x1b[Z', title: 'Shift+Tab' },
+  { id: 'slash', label: '/', value: '/', title: 'Slash' },
+  { id: 'tilde', label: '~', value: '~', title: 'Home dir' },
+  { id: 'find', label: 'Find', value: '__FIND__', title: 'Search' },
+  { id: 'claude', label: 'Claude', value: 'claude --dangerously-skip-permissions\r', title: 'Launch Claude' },
+] as const;
 
 function useKeyboardOffset(): number {
   const [offset, setOffset] = useState(0);
@@ -260,7 +267,7 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
                 fontSize: 13,
                 fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
                 fontWeight: 500,
-                color: key.id === 'ctrl-c' ? '#f87171' : '#a1a1aa',
+                color: 'accent' in key && key.accent ? '#f87171' : key.id === 'claude' ? '#00d4ff' : '#a1a1aa',
                 background: 'rgba(255, 255, 255, 0.05)',
                 border: '1px solid rgba(255, 255, 255, 0.08)',
                 borderRadius: 6,
