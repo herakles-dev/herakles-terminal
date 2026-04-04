@@ -2006,11 +2006,11 @@ export default function App() {
 
   const toolbarContent = (
     <>
-      <div className="flex items-center gap-2 sm:gap-3">
-        <span className="text-[10px] text-[#52525b] font-mono">v2.2</span>
-        <ConnectionStatus 
-          state={connectionState} 
-          sessionId={sessionId} 
+      <div className="flex items-center gap-1 sm:gap-3 min-w-0">
+        <span className="text-[10px] text-[#52525b] font-mono flex-shrink-0">v2.2</span>
+        <ConnectionStatus
+          state={connectionState}
+          sessionId={sessionId}
           reconnectIn={reconnectIn}
           onReconnectNow={reconnectNow}
           latency={latency}
@@ -2022,7 +2022,7 @@ export default function App() {
           <span>panel</span>
         </div>
       </div>
-      <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+      <div className="flex items-center gap-0 sm:gap-2 flex-shrink-0">
         <TemplateToolbar
           onExecuteCommand={handleExecuteCommand}
         />
@@ -2107,7 +2107,7 @@ export default function App() {
         <div className="relative flex items-center justify-between select-none px-2 sm:px-5 py-2 sm:py-2.5 border-b border-white/[0.04] bg-gradient-to-r from-[#07070c]/95 via-[#0c0c14]/95 to-[#07070c]/95 backdrop-blur-xl overflow-visible shadow-[0_4px_24px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.03)]">
           <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />
           {toolbarContent}
-          <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-center gap-0 sm:gap-1 flex-shrink-0">
             {/* Mobile-only tasks toggle */}
             <button
               onClick={(e) => { e.stopPropagation(); setTodoPanelExpanded(prev => !prev); }}
