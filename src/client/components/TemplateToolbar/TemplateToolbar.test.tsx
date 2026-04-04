@@ -46,33 +46,28 @@ describe('TemplateToolbar', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('renders nothing while loading', () => {
+  it('renders mobile hamburger while loading (no desktop icons)', () => {
     // Don't resolve fetch yet
     global.fetch = vi.fn().mockReturnValue(new Promise(() => {}));
 
-    const { container } = render(
-      <TemplateToolbar onExecuteCommand={onExecuteCommand} />
-    );
-    expect(container.innerHTML).toBe('');
+    render(<TemplateToolbar onExecuteCommand={onExecuteCommand} />);
+    // Mobile hamburger always renders
+    expect(screen.getByLabelText('Templates menu')).toBeInTheDocument();
   });
 
-  it('renders nothing when no templates match categories', async () => {
+  it('renders only mobile hamburger when no templates match categories', async () => {
     setupFetchMock([{ id: 't1', name: 'Unknown', category: 'nonexistent', command: 'x', isBuiltIn: true }]);
 
-    const { container } = render(
-      <TemplateToolbar onExecuteCommand={onExecuteCommand} />
-    );
+    render(<TemplateToolbar onExecuteCommand={onExecuteCommand} />);
 
-    // Wait for fetch to resolve
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalled();
     });
 
-    // Should render nothing since no categories match
-    await waitFor(() => {
-      const buttons = container.querySelectorAll('button[title]');
-      expect(buttons.length).toBe(0);
-    });
+    // Mobile hamburger always renders, but no desktop category icon buttons
+    expect(screen.getByLabelText('Templates menu')).toBeInTheDocument();
+    // Desktop category buttons should not exist (no matching categories)
+    expect(screen.queryByTitle('Orchestrate')).not.toBeInTheDocument();
   });
 
   it('fetches templates from /api/templates on mount', async () => {
@@ -83,20 +78,17 @@ describe('TemplateToolbar', () => {
     });
   });
 
-  it('handles fetch failure gracefully', async () => {
+  it('handles fetch failure gracefully — still shows hamburger', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false });
 
-    const { container } = render(
-      <TemplateToolbar onExecuteCommand={onExecuteCommand} />
-    );
+    render(<TemplateToolbar onExecuteCommand={onExecuteCommand} />);
 
-    // Wait for fetch to resolve - should not crash
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalled();
     });
 
-    // Should render nothing since templates list is empty after failed fetch
-    expect(container.innerHTML).toBe('');
+    // Mobile hamburger always renders even on fetch failure
+    expect(screen.getByLabelText('Templates menu')).toBeInTheDocument();
   });
 
   it('renders mobile hamburger menu button', async () => {

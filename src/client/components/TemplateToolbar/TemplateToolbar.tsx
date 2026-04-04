@@ -53,7 +53,10 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
     const fetchTemplates = async () => {
       try {
         const res = await fetch(apiUrl('/templates'), { credentials: 'include' });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (!cancelled) setLoading(false);
+          return;
+        }
         const json = await res.json();
         const all: Template[] = [
           ...(json.data?.builtIn || []),
@@ -94,14 +97,13 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
     setMobileOpen(false);
   }, [onExecuteCommand]);
 
-  if (!visible || loading) return null;
+  if (!visible) return null;
 
   // Filter categories that have templates
   const activeCategories = CATEGORIES.filter(cat =>
     templates.some(t => t.category === cat.id)
   );
-
-  if (activeCategories.length === 0) return null;
+  const hasTemplates = activeCategories.length > 0;
 
   const mobileMenu = (
     <div className={mobileOnly ? 'relative' : 'sm:hidden relative'} ref={mobileRef}>
@@ -124,6 +126,40 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
       {mobileOpen && (
         <div className="absolute top-full right-0 mt-2 w-[260px] sm:w-[240px] max-h-[60vh] overflow-y-auto bg-[#0a0a0f]/95 backdrop-blur-lg border border-[#27272a] rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-[9999] animate-scale-in" style={{ touchAction: 'pan-y' }}>
           <div className="p-2">
+            {/* Quick actions — always available */}
+            <div className="mb-2">
+              <div className="flex items-center gap-2 px-2 py-1.5 text-[#71717a]">
+                <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                </svg>
+                <span className="text-[11px] font-semibold uppercase tracking-wider">Quick Actions</span>
+              </div>
+              {[
+                { label: 'Clear Screen', cmd: 'clear\r' },
+                { label: 'Cancel Command', cmd: '\x03' },
+                { label: 'New Window', cmd: '__NEW_WINDOW__' },
+              ].map(action => (
+                <button
+                  key={action.label}
+                  onClick={() => {
+                    if (action.cmd === '__NEW_WINDOW__') {
+                      // Dispatch keyboard shortcut for new window
+                      document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'T', ctrlKey: true, shiftKey: true, bubbles: true,
+                      }));
+                      setMobileOpen(false);
+                    } else {
+                      handleExecute(action.cmd);
+                    }
+                  }}
+                  className="w-full text-left px-3 py-2.5 sm:py-1.5 text-[12px] sm:text-[11px] text-[#a1a1aa] hover:text-[#00d4ff] hover:bg-[#27272a]/40 active:bg-[#27272a]/60 rounded transition-colors"
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Template categories — only when loaded */}
             {activeCategories.map(cat => {
               const catTemplates = templates.filter(t => t.category === cat.id);
               return (
@@ -157,6 +193,10 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
                 </div>
               );
             })}
+
+            {loading && (
+              <div className="px-3 py-2 text-[11px] text-[#52525b]">Loading templates...</div>
+            )}
           </div>
         </div>
       )}
@@ -167,24 +207,26 @@ export function TemplateToolbar({ onExecuteCommand, visible = true, mobileOnly =
 
   return (
     <>
-      {/* Desktop: inline icon bar */}
-      <div className="hidden sm:flex items-center gap-0.5">
-        <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent mx-1" />
-        {activeCategories.map(cat => (
-          <TemplateIconButton
-            key={cat.id}
-            icon={cat.icon}
-            label={cat.label}
-            categoryId={cat.id}
-            templates={templates}
-            onExecute={handleExecute}
-            highlight={cat.highlight}
-          />
-        ))}
-        <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent mx-1" />
-      </div>
+      {/* Desktop: inline icon bar (only when templates loaded) */}
+      {hasTemplates && (
+        <div className="hidden sm:flex items-center gap-0.5">
+          <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent mx-1" />
+          {activeCategories.map(cat => (
+            <TemplateIconButton
+              key={cat.id}
+              icon={cat.icon}
+              label={cat.label}
+              categoryId={cat.id}
+              templates={templates}
+              onExecute={handleExecute}
+              highlight={cat.highlight}
+            />
+          ))}
+          <div className="w-px h-5 bg-gradient-to-b from-transparent via-[#27272a] to-transparent mx-1" />
+        </div>
+      )}
 
-      {/* Mobile: hamburger menu (sm:hidden) */}
+      {/* Mobile: hamburger menu (sm:hidden) — always shows, has quick actions even without templates */}
       {mobileMenu}
     </>
   );
