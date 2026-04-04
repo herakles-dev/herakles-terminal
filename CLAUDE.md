@@ -1,13 +1,14 @@
 # Herakles Terminal - Claude Development Context
 
-**Version:** 1.2.0 | **Last Updated:** March 31, 2026 | **Protocol:** [V11](/home/hercules/v11/CLAUDE.md)
+**Version:** 2.0.0 | **Last Updated:** April 4, 2026 | **Protocol:** [V11](/home/hercules/v11/CLAUDE.md)
 
 ## Quick Context
 - **What:** Mobile-first web terminal (xterm.js + WebSocket + tmux persistence)
 - **Port:** 8096 | **Subdomain:** terminal.herakles.dev
 - **Stack:** React 18 + TypeScript + Vite (client) | Node.js + Express + ws + node-pty (server)
-- **Status:** Production v1.2.0 (471 tests, Mar 31, 2026)
+- **Status:** Production v2.0.0 (557 tests, Apr 4, 2026)
 - **Layout:** SplitView v1 = PRODUCTION (`USE_GRID_LAYOUT = false`). WindowGrid v2 = TESTING.
+- **Renderer:** DOM renderer v2.0 = PRODUCTION (`USE_DOM_RENDERER = true`). WebGL fallback available.
 
 ## Essential Commands
 
@@ -60,6 +61,7 @@ Client (src/client/)
 │   ├── SplitView/                       # [v1] Absolute positioning layout (PRODUCTION)
 │   ├── WindowGrid/                      # [v2] CSS Grid layout (TESTING)
 │   ├── TeamBar/                         # Team cockpit (bottom bar + accordion)
+│   ├── SearchOverlay/                    # Ctrl+F terminal search with highlights
 │   ├── SidePanel/                       # Command builder, templates
 │   ├── TodoPanel/                       # Claude Code task sync
 │   ├── Canvas/                          # Artifact rendering + fullscreen
@@ -72,6 +74,13 @@ Client (src/client/)
 │   ├── useGridResize.ts                 # [v2] ResizeObserver → RAF → fit()
 │   ├── useTeamCockpit.ts                # Team state management
 │   └── useWebSocket / useXTermSetup / useRendererSetup
+├── renderer/
+│   ├── ScreenBuffer.ts                  # Packed Int32Array cells, row-level diff
+│   ├── DomRenderer.ts                   # Row divs + styled spans, CSS var themes
+│   ├── VirtualScroller.ts               # Scrollback navigation with scrollbar
+│   ├── Cursor.ts                        # Blinking cursor overlay
+│   ├── measureFont.ts                   # Monospace char measurement
+│   └── linkDetector.ts                  # URL detection for clickable links
 └── services/
     └── OutputPipelineManager.ts         # Buffer consolidation + spinner filtering
 
