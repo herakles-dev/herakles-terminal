@@ -204,7 +204,7 @@ export interface ArtifactMetadata {
 }
 
 export type ServerMessage =
-  | { type: 'auth-success'; sessionId: string; token: string; sessions?: Session[] }
+  | { type: 'auth-success'; sessionId: string; token: string; sessions?: Session[]; username?: string; groups?: string[] }
   | { type: 'auth-error'; error: string }
   | { type: 'output'; data: string; windowId?: string }
   | { type: 'ping' }

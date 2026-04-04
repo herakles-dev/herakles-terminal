@@ -130,10 +130,26 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('artifact:unsubscribe'),
   }),
   z.object({
+    type: z.literal('window:backpressure'),
+    windowId: uuidSchema,
+    throttle: z.boolean(),
+  }),
+  z.object({
     type: z.literal('team:subscribe'),
   }),
   z.object({
     type: z.literal('team:unsubscribe'),
+  }),
+  z.object({
+    type: z.literal('stop:activate'),
+    youtubeUrl: z.string().url().max(2000).optional(),
+    message: z.string().max(500).optional(),
+  }),
+  z.object({
+    type: z.literal('stop:subscribe'),
+  }),
+  z.object({
+    type: z.literal('stop:unsubscribe'),
   }),
 ]);
 

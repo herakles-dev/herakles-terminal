@@ -1,12 +1,12 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { apiUrl } from './services/api';
-import { enableConsoleLoopback } from './utils/consoleLoopback';
-
-// Enable console loopback for server-side debugging
-enableConsoleLoopback();
+// Console loopback disabled in production — was generating ~15k+ requests/day
+// import { enableConsoleLoopback } from './utils/consoleLoopback';
+// enableConsoleLoopback();
 import type { Terminal as XTerm } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import './styles/dom-terminal.css';
 
 import QuickKeyBar from './components/QuickKeyBar/QuickKeyBar';
 import ConnectionStatus from './components/ConnectionStatus';
@@ -18,6 +18,7 @@ import ContextMenu from './components/ContextMenu';
 import { LayoutSelector, LAYOUT_PRESETS } from './components/LayoutSelector';
 import { TerminalCore } from './components/TerminalCore';
 import type { TerminalCoreHandle } from './components/TerminalCore';
+import { DomTerminalCore } from './components/DomTerminalCore';
 import { MobileInputHandler } from './components/MobileInputHandler';
 import { LightningOverlay } from './components/LightningOverlay';
 import { ProjectNavigator } from './components/ProjectNavigator';
@@ -43,16 +44,19 @@ import { useCanvasArtifacts } from './hooks/useCanvasArtifacts';
 import { useClipboardUpload } from './hooks/useClipboardUpload';
 import { useHealthActions } from './hooks/useHealthActions';
 import { useTeamCockpit } from './hooks/useTeamCockpit';
+import { useStopProtocol } from './hooks/useStopProtocol';
 import { TeamBar } from './components/TeamBar/TeamBar';
+import { RizStopPanel, StopProtocolOverlay } from './components/StopProtocol';
+import { STOP_PROTOCOL_USER } from '@shared/stopProtocol';
 import { useToast } from './components/Toast/Toast';
 import { uploadService } from './services/uploadService';
-import { OutputPipelineManager, filterThinkingOutput } from './services/OutputPipelineManager';
+import { OutputPipelineManager, filterAllThinkingOutput } from './services/OutputPipelineManager';
 import { WebGLHealthMonitor, exposeMetricsToWindow } from './services/WebGLHealthMonitor';
 
 import { ResizeCoordinatorContext } from './contexts/ResizeCoordinatorContext';
 
 
-import { TERMINAL_DEFAULTS, USE_GRID_LAYOUT } from '@shared/constants';
+import { TERMINAL_DEFAULTS, USE_GRID_LAYOUT, USE_DOM_RENDERER } from '@shared/constants';
 import { WindowGrid, type GridWindowConfig } from './components/WindowGrid';
 import { useGridResize } from './hooks/useGridResize';
 
@@ -163,6 +167,8 @@ function calculateWindowLayouts(windows: Array<{ type?: 'terminal' | 'media' | '
 
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(true);
+  const [currentUser, setCurrentUser] = useState<{ username: string; groups: string[] } | null>(null);
+  const [_userChecked, setUserChecked] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelExpanded, setSidePanelExpanded] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>();
@@ -178,7 +184,12 @@ export default function App() {
   useKeyboardHeight();
   const toast = useToast();
   const { isMobile } = useMobileDetect();
-  const resizeCoordinator = useResizeCoordinator();
+  // v1 early resize pending: buffer output at the START of resize, not after fit()
+  const resizeStartHandlerRef = useRef<(() => void) | null>(null);
+  const earlyResizeSafetyRef = useRef<ReturnType<typeof setTimeout>>();
+  const resizeCoordinator = useResizeCoordinator({
+    onResizeStart: () => resizeStartHandlerRef.current?.(),
+  });
   const gridResize = useGridResize();
   const {
     artifacts: canvasArtifacts,
@@ -248,6 +259,22 @@ export default function App() {
       // mode is controlled by parent via musicPlayerVisible, don't sync back
     }));
   }, []); // Empty deps - setMusicPlayerState is stable
+
+  // Check user identity on mount — skip welcome page for stop protocol user
+  useEffect(() => {
+    fetch(apiUrl('/whoami'), { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.username) {
+          setCurrentUser({ username: data.username, groups: data.groups || [] });
+          if (data.username === STOP_PROTOCOL_USER) {
+            setShowWelcome(false); // Skip welcome for riz
+          }
+        }
+        setUserChecked(true);
+      })
+      .catch(() => setUserChecked(true));
+  }, []);
 
   // Fetch CSRF token on mount
   useEffect(() => {
@@ -352,6 +379,7 @@ export default function App() {
   const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
   const sendMessageRef = useRef<((msg: object) => void) | null>(null);
   const teamCockpitRef = useRef<((msg: any) => void) | null>(null);
+  const stopProtocolRef = useRef<((msg: any) => void) | null>(null);
   const activeTeamRef = useRef<import('@shared/teamProtocol').TeamInfo | null>(null);
   const addArtifactRef = useRef(addArtifact);
   addArtifactRef.current = addArtifact;
@@ -370,6 +398,31 @@ export default function App() {
   resizeCoordinatorRef.current = resizeCoordinator;
   const gridResizeRef = useRef(gridResize);
   gridResizeRef.current = gridResize;
+
+  // v1 early resize pending: set resizePending(true) for terminal windows
+  // at the START of a resize cycle (before debounce), so spinner output is
+  // buffered instead of being written to xterm where it creates dot artifacts
+  // when the terminal reflows to a smaller size.
+  resizeStartHandlerRef.current = () => {
+    if (USE_GRID_LAYOUT) return; // v2 handles this via onResizePending in performFit
+    if (terminalRefs.current.size === 0) return; // No terminals mounted yet
+    for (const windowId of terminalRefs.current.keys()) {
+      outputPipelineRef.current?.setResizePending(windowId, true);
+    }
+    // H6: Only arm safety timer once per cycle — don't reset on each drag event.
+    // If already armed, the existing timer will fire. Avoids perpetual deferral
+    // during sustained drag where onResizeStart fires on every mouse-move.
+    if (!earlyResizeSafetyRef.current) {
+      earlyResizeSafetyRef.current = setTimeout(() => {
+        earlyResizeSafetyRef.current = undefined;
+        for (const windowId of terminalRefs.current.keys()) {
+          if (outputPipelineRef.current?.isResizePending(windowId)) {
+            outputPipelineRef.current.setResizePending(windowId, false);
+          }
+        }
+      }, 2000);
+    }
+  };
 
   // Ref for windows array to avoid handleStateChange instability (CF-B fix)
   const windowsRef = useRef(windows);
@@ -428,6 +481,9 @@ export default function App() {
     switch (msg.type) {
       case 'auth-success':
         localStorage.setItem('herakles-reconnect-token', msg.token || '');
+        if (msg.username) {
+          setCurrentUser({ username: msg.username, groups: msg.groups || [] });
+        }
         if (msg.sessions && msg.sessions.length > 0) {
           const session = msg.sessions[0];
           localStorage.setItem('herakles-session-id', session.id);
@@ -520,6 +576,13 @@ export default function App() {
       }
 
       case 'window:restore': {
+        // H4: If resize is in flight, defer restore — writing now races with
+        // SIGWINCH re-render and can produce dot artifacts.
+        if (outputPipelineRef.current?.isResizePending(msg.windowId)) {
+          pendingRestoreRef.current.set(msg.windowId, msg.data || '');
+          break;
+        }
+
         // Step 1: Enter restore mode - clear and block pipeline
         outputPipelineRef.current?.setRestoreInProgress(msg.windowId, true);
 
@@ -531,7 +594,7 @@ export default function App() {
 
         if (terminal && msg.data) {
           // Step 2: Filter thinking output before restore write (defense-in-depth)
-          const filteredData = filterThinkingOutput(msg.data);
+          const filteredData = filterAllThinkingOutput(msg.data);
           // Single RAF (reduced from 3 nested RAFs)
           requestAnimationFrame(() => {
             // FIX A: Use ANSI clear screen + cursor home instead of terminal.reset()
@@ -583,12 +646,26 @@ export default function App() {
         const { windowId, cols, rows } = msg;
         if (!USE_GRID_LAYOUT) {
           resizeCoordinatorRef.current.confirmResize(windowId, cols, rows);
+          // Clear early-resize safety timeout — server ack arrived successfully
+          if (earlyResizeSafetyRef.current) {
+            clearTimeout(earlyResizeSafetyRef.current);
+            earlyResizeSafetyRef.current = undefined;
+          }
           // RC-1: Delay clearing resize-pending by 80ms to match server drain delay.
           // Lets tmux SIGWINCH re-render output arrive and get filtered before buffer release.
+          // M13: Capture pipeline instance at call time to avoid stale ref on reconnect.
+          const pipeline = outputPipelineRef.current;
           setTimeout(() => {
             // Guard: skip if window was destroyed during the delay
-            if (outputPipelineRef.current?.isResizePending(windowId)) {
-              outputPipelineRef.current.setResizePending(windowId, false);
+            if (pipeline?.isResizePending(windowId)) {
+              pipeline.setResizePending(windowId, false);
+            }
+            // H4: Flush deferred restore if one was queued during resize
+            const deferredRestore = pendingRestoreRef.current.get(windowId);
+            if (deferredRestore !== undefined) {
+              pendingRestoreRef.current.delete(windowId);
+              // Re-dispatch as a synthetic window:restore message
+              handleMessage({ type: 'window:restore', windowId, data: deferredRestore });
             }
           }, 80);
           break;
@@ -618,11 +695,13 @@ export default function App() {
       }
 
       case 'window:output': {
-        const windowId = msg.windowId;
-        if (!USE_GRID_LAYOUT && resizeCoordinatorRef.current.isResizePending(windowId)) {
-          outputPipelineRef.current?.setResizePending(windowId, true);
-        }
-        outputPipelineRef.current?.enqueue(windowId, msg.data, msg.seq);
+        // H9: Removed re-arming of pipeline resizePending from coordinator state.
+        // The coordinator's isResizePending and the pipeline's resizePending are
+        // independent state stores — using one to re-arm the other can extend
+        // buffering indefinitely after the 80ms ack timer clears the pipeline.
+        // The pipeline's own resizePending flag (set by onResizeStart) is the
+        // correct gating mechanism; enqueue() checks it internally.
+        outputPipelineRef.current?.enqueue(msg.windowId, msg.data, msg.seq);
         break;
       }
 
@@ -631,7 +710,7 @@ export default function App() {
         // Filter thinking output before writing (defense-in-depth)
         if (msg.data) {
           const handle = terminalRefs.current.get(msg.windowId);
-          handle?.terminal?.write(filterThinkingOutput(msg.data));
+          handle?.terminal?.write(filterAllThinkingOutput(msg.data));
         }
         break;
       }
@@ -713,6 +792,14 @@ export default function App() {
         teamCockpitRef.current?.(msg);
         break;
 
+      case 'stop:sync':
+      case 'stop:warning':
+      case 'stop:lockout':
+      case 'stop:clear':
+      case 'stop:ack':
+        stopProtocolRef.current?.(msg);
+        break;
+
       case 'error':
         console.error('WebSocket error:', msg.code, msg.message);
         if (msg.code === 'SESSION_NOT_FOUND') {
@@ -743,6 +830,18 @@ export default function App() {
       }
       pendingRestoreRef.current.clear();
 
+      // H5: Clear resize gate refs — prevents stuck gates after fast reconnect.
+      // Any in-flight gates will never receive their server acks on the old connection.
+      resizeGateRef.current.forEach(gate => {
+        if (gate.safetyTimer) clearTimeout(gate.safetyTimer);
+      });
+      resizeGateRef.current.clear();
+      resizeSeqRef.current.clear();
+      if (earlyResizeSafetyRef.current) {
+        clearTimeout(earlyResizeSafetyRef.current);
+        earlyResizeSafetyRef.current = undefined;
+      }
+
       // Reset loading state to prevent stuck loading screen
       // (covers auth failure via close code 4001, network drops, etc.)
       setIsLoading(false);
@@ -753,9 +852,10 @@ export default function App() {
       if (wasConnectedRef.current) {
         refetchMissedArtifacts();
 
-        // Re-subscribe all existing windows to trigger restore after reconnection
-        // This ensures terminal content is restored after network hiccups
+        // Re-subscribe existing windows to trigger restore after reconnection.
+        // Skip minimized windows — they'll re-subscribe on handleWindowRestore.
         windowsRef.current.forEach(win => {
+          if (win.isMinimized) return;
           const handle = terminalRefs.current.get(win.id);
           if (handle?.terminal) {
             sendMessageRef.current?.({
@@ -805,6 +905,10 @@ export default function App() {
   });
   teamCockpitRef.current = handleTeamMessage;
   activeTeamRef.current = activeTeam;
+
+  // Stop protocol integration (Riz bedtime enforcement)
+  const stopProtocol = useStopProtocol(wsSend, connectionState === 'connected');
+  stopProtocolRef.current = stopProtocol.handleStopMessage;
 
   // Track if we're subscribed to todo/artifact/music updates
   const todoSubscribedRef = useRef(false);
@@ -878,13 +982,20 @@ export default function App() {
     exposeMetricsToWindow(healthMonitor);
 
     // Create output pipeline with health monitor
+    const mobileDevice = /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
     outputPipelineRef.current = new OutputPipelineManager(writeToTerminal, {
       healthMonitor,
+      isMobile: mobileDevice,
     });
 
     // Wire up replay request callback - sends window:replay to server
     outputPipelineRef.current.setReplayRequestCallback((windowId, afterSeq) => {
       sendMessageRef.current?.({ type: 'window:replay', windowId, afterSeq });
+    });
+
+    // Wire up backpressure callback - tells server to pause/resume output coalescing
+    outputPipelineRef.current.setBackpressureCallback((windowId, throttle) => {
+      sendMessageRef.current?.({ type: 'window:backpressure', windowId, throttle });
     });
 
     return () => {
@@ -966,11 +1077,31 @@ export default function App() {
   const panelResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (USE_GRID_LAYOUT) return; // v2: ResizeObserver handles panel-triggered resizes
+    // Buffer output immediately when panel changes — covers the 16ms gap before triggerResize.
+    // H3: Only set if terminals exist. Arm safety timer directly (not via onResizeStart)
+    // to handle the edge case where cleanup cancels the 16ms timer before triggerResize fires.
+    if (terminalRefs.current.size > 0) {
+      for (const windowId of terminalRefs.current.keys()) {
+        outputPipelineRef.current?.setResizePending(windowId, true);
+      }
+      if (!earlyResizeSafetyRef.current) {
+        earlyResizeSafetyRef.current = setTimeout(() => {
+          earlyResizeSafetyRef.current = undefined;
+          for (const windowId of terminalRefs.current.keys()) {
+            if (outputPipelineRef.current?.isResizePending(windowId)) {
+              outputPipelineRef.current.setResizePending(windowId, false);
+            }
+          }
+        }, 2000);
+      }
+    }
     if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current);
     panelResizeTimerRef.current = setTimeout(() => {
       resizeCoordinatorRef.current.triggerResize();
     }, 16);
-    return () => { if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current); };
+    return () => {
+      if (panelResizeTimerRef.current) clearTimeout(panelResizeTimerRef.current);
+    };
   }, [sidePanelOpen, sidePanelExpanded, todoPanelExpanded, todoPanelWidth, minimapVisible]);
 
   // v1 fallback: delayed resize timeouts per window (not used in v2)
@@ -993,6 +1124,11 @@ export default function App() {
     if (skipResize) {
       return;
     }
+
+    // H2: Set resize pending for this specific window BEFORE the 250ms delay.
+    // resizeTarget() bypasses triggerResize/onResizeStart, so the early pending
+    // mechanism wouldn't activate on this path otherwise.
+    outputPipelineRef.current?.setResizePending(id, true);
 
     // Use resize coordinator for proper fit + server notification
     const existingTimeout = fitTimeoutRef.current.get(id);
@@ -1060,6 +1196,10 @@ export default function App() {
       // v2 grid: replay any resize that was deferred during recovery
       if (USE_GRID_LAYOUT) {
         gridResizeRef.current.notifyRecoveryEnd(terminalId);
+      } else {
+        // M12: After WebGL recovery, re-fit to ensure canvas matches container.
+        // The recovery creates a fresh WebGL surface that may be at default 80x24.
+        resizeCoordinatorRef.current.resizeTarget(terminalId, true);
       }
 
       if (success) {
@@ -1253,7 +1393,7 @@ export default function App() {
         const pendingRestore = pendingRestoreRef.current.get(windowId);
         if (pendingRestore && handle.terminal) {
           pendingRestoreRef.current.delete(windowId);
-          const filteredPending = filterThinkingOutput(pendingRestore);
+          const filteredPending = filterAllThinkingOutput(pendingRestore);
           requestAnimationFrame(() => {
             // FIX A: Use ANSI clear instead of reset() to preserve scrollback
             handle.terminal?.write('\x1b[2J\x1b[H' + filteredPending, () => {
@@ -1286,18 +1426,32 @@ export default function App() {
         className={`terminal-container ${isFocused ? '' : 'opacity-90'}`}
         style={{ position: 'relative', width: '100%', height: '100%' }}
       >
-        <TerminalCore
-          ref={handleTerminalRef}
-          onData={handleTerminalData}
-          onResize={handleTerminalResize}
-          onReady={handleTerminalReady}
-          onRecoveryStart={handleRecoveryStart}
-          onRecoveryEnd={handleRecoveryEnd}
-          isRecovering={() => outputPipelineRef.current?.isRecoveryInProgress(windowId) ?? false}
-          healthMonitor={healthMonitorRef.current ?? undefined}
-          fontSize={fontSize}
-          terminalId={windowId}
-        />
+        {USE_DOM_RENDERER ? (
+          <DomTerminalCore
+            ref={handleTerminalRef}
+            onData={handleTerminalData}
+            onResize={handleTerminalResize}
+            onReady={handleTerminalReady}
+            fontSize={fontSize}
+            terminalId={windowId}
+          />
+        ) : (
+          <TerminalCore
+            ref={handleTerminalRef}
+            onData={handleTerminalData}
+            onResize={handleTerminalResize}
+            onReady={handleTerminalReady}
+            onRecoveryStart={handleRecoveryStart}
+            onRecoveryEnd={handleRecoveryEnd}
+            isRecovering={() => outputPipelineRef.current?.isRecoveryInProgress(windowId) ?? false}
+            healthMonitor={healthMonitorRef.current ?? undefined}
+            fontSize={fontSize}
+            terminalId={windowId}
+            onScrollStorm={(_id, active) => {
+              outputPipelineRef.current?.setForcedThrottleMode(active ? 'heavy' : undefined);
+            }}
+          />
+        )}
         <MobileInputHandler
           onInput={handleTerminalData}
           enabled={isMobile && isFocused}
@@ -1896,11 +2050,33 @@ export default function App() {
     </>
   );
 
+  // Riz sees only the Stop Panel — no terminal access
+  if (currentUser?.username === STOP_PROTOCOL_USER && !showWelcome) {
+    return (
+      <RizStopPanel
+        phase={stopProtocol.phase}
+        graceRemaining={stopProtocol.graceRemaining}
+        lockoutRemaining={stopProtocol.lockoutRemaining}
+        onActivate={stopProtocol.activate}
+      />
+    );
+  }
+
   return (
     <ResizeCoordinatorContext.Provider value={resizeCoordinator}>
     <FileDropZone onFilesDropped={handleFilesDropped} enabled={!showWelcome}>
     <div className="flex flex-col bg-black" style={{ height: viewportHeight }} data-viewport-stable={viewportStable ? "true" : "false"}>
       <LightningOverlay intensity={0.3} disabled={!showLightning} />
+      {/* Stop Protocol overlay (warning/grace/lockout) */}
+      <StopProtocolOverlay
+        phase={stopProtocol.phase}
+        youtubeUrl={stopProtocol.youtubeUrl}
+        message={stopProtocol.message}
+        graceRemaining={stopProtocol.graceRemaining}
+        lockoutRemaining={stopProtocol.lockoutRemaining}
+        showWarning={stopProtocol.showWarning}
+        onDismissWarning={stopProtocol.dismissWarning}
+      />
       {toolbarVisible ? (
         <div className="relative flex items-center justify-between select-none px-4 sm:px-5 py-2.5 border-b border-white/[0.04] bg-gradient-to-r from-[#07070c]/95 via-[#0c0c14]/95 to-[#07070c]/95 backdrop-blur-xl overflow-visible shadow-[0_4px_24px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.03)]">
           <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />

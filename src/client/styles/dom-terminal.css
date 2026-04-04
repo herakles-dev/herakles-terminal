@@ -1,0 +1,35 @@
+/* DOM Terminal Renderer Styles */
+
+.dom-term-viewport {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeSpeed;
+  contain: layout paint;
+  white-space: pre;
+  cursor: text;
+}
+
+.dom-term-rows {
+  contain: layout;
+}
+
+.dom-term-row {
+  white-space: pre;
+  contain: content;
+  overflow: hidden;
+}
+
+@keyframes dom-term-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.dom-term-cursor {
+  animation: dom-term-cursor-blink 1s step-end infinite;
+}
+
+.dom-term-viewport ::selection {
+  background-color: var(--terminal-selection-bg, rgba(0, 212, 255, 0.3));
+}

@@ -109,6 +109,12 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// User identity endpoint (used by client to detect role before WebSocket)
+app.get('/api/whoami', autheliaAuth, (req, res) => {
+  const user = (req as any).user;
+  res.json({ username: user?.username || null, groups: user?.groups || [] });
+});
+
 // DEBUG: Minimap classification debug endpoint (no auth for debugging)
 app.post('/api/debug/minimap', (req, res) => {
   const { lines, classifications } = req.body || {};

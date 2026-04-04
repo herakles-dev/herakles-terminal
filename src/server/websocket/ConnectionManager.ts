@@ -13,6 +13,7 @@ import { validateClientMessage, ValidatedClientMessage } from './messageSchema.j
 import type { ServerMessage } from '../../shared/types.js';
 import { todoManager } from '../todo/TodoManager.js';
 import { teamManager } from '../team/TeamManager.js';
+import { stopProtocolManager } from '../stop/StopProtocolManager.js';
 import { todoFileWatcher } from '../todo/TodoFileWatcher.js';
 import { contextManager } from '../context/ContextManager.js';
 import { OutputRingBuffer } from '../window/OutputRingBuffer.js';
@@ -59,6 +60,7 @@ export class ConnectionManager {
   private windowSubscribeTimers: Map<string, NodeJS.Timeout> = new Map();
   private cronsInitializedForUsers: Set<string> = new Set();
   private outputRingBuffers: Map<string, OutputRingBuffer> = new Map();
+  private outputCoalesceState: Map<string, { buffer: string; timer: NodeJS.Timeout | null; seq: number }> = new Map();
   private musicManager: MusicManager | null = null;
   private artifactManager: ArtifactManager | null = null;
 
@@ -240,6 +242,8 @@ export class ConnectionManager {
       type: 'auth-success',
       sessionId: '',
       token: '',
+      username: user.username,
+      groups: user.groups,
       sessions: sessions.map(s => ({
         id: s.id,
         name: s.name,
@@ -397,6 +401,10 @@ export class ConnectionManager {
         this.handleWindowReplay(connection, (message as any).windowId, (message as any).afterSeq);
         break;
 
+      case 'window:backpressure':
+        this.handleWindowBackpressure((message as any).windowId, (message as any).throttle);
+        break;
+
       case 'context:subscribe':
         await this.handleContextSubscribe(connection, (message as any).windowId, (message as any).projectPath);
         break;
@@ -437,6 +445,38 @@ export class ConnectionManager {
       case 'team:unsubscribe':
         teamManager.unsubscribe(connection.ws);
         break;
+
+      case 'stop:subscribe':
+        stopProtocolManager.subscribe(connection.ws);
+        break;
+
+      case 'stop:unsubscribe':
+        stopProtocolManager.unsubscribe(connection.ws);
+        break;
+
+      case 'stop:activate': {
+        const result = stopProtocolManager.activate(
+          connection.user.username,
+          (message as any).youtubeUrl,
+          (message as any).message,
+        );
+        if (!result.ok) {
+          this.send(connection.ws, {
+            type: 'error',
+            code: 'STOP_PROTOCOL_ERROR',
+            message: result.reason || 'Activation failed',
+          });
+        } else {
+          // Send ack directly (not in ServerMessage union)
+          if (connection.ws.readyState === connection.ws.OPEN) {
+            connection.ws.send(JSON.stringify({
+              type: 'stop:ack',
+              phase: stopProtocolManager.getPhase(),
+            }));
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -722,8 +762,13 @@ export class ConnectionManager {
       await this.windowManager.closeWindow(windowId, connection.user.email);
       connection.windowSubscriptions.delete(windowId);
 
-      // Clean up listener state and ring buffer when window closes
+      // Clean up listener state, ring buffer, and coalesce timer when window closes
       this.windowListenerStates.delete(windowId);
+      const coalesce = this.outputCoalesceState.get(windowId);
+      if (coalesce) {
+        if (coalesce.timer) clearTimeout(coalesce.timer);
+        this.outputCoalesceState.delete(windowId);
+      }
       const ringBuffer = this.outputRingBuffers.get(windowId);
       if (ringBuffer) {
         ringBuffer.clear();
@@ -786,9 +831,12 @@ export class ConnectionManager {
       try {
         const result = await this.windowManager.resizeWindow(windowId, cols, rows, connection.user.email);
         // RC-1: Short drain after tmux resize — lets SIGWINCH re-render output
-        // arrive at the client BEFORE the ack clears the pending buffer.
+        // arrive at ALL clients BEFORE the ack clears the pending buffer.
         setTimeout(() => {
-          this.send(connection.ws, {
+          // H8: Broadcast to all subscribers, not just the triggering connection.
+          // Multi-device sessions (phone + desktop) both need the ack to release
+          // their resize gates. The tmux pane was resized for everyone.
+          this.broadcastToWindow(windowId, {
             type: 'window:resized',
             windowId,
             cols: result.cols,
@@ -798,6 +846,16 @@ export class ConnectionManager {
         }, 80);
       } catch (error) {
         console.error(`Resize error for window ${windowId}:`, error);
+        // M17: Send error ack so client's resize gate and resizePending clear
+        // instead of relying on the 200ms safety timer.
+        // Uses broadcastToWindow for multi-device consistency (H8).
+        this.broadcastToWindow(windowId, {
+          type: 'window:resized',
+          windowId,
+          cols,
+          rows,
+          seq,
+        });
       }
     }, 50);
 
@@ -894,6 +952,33 @@ export class ConnectionManager {
       fromSeq: result.fromSeq,
       toSeq: result.toSeq,
     });
+  }
+
+  private handleWindowBackpressure(windowId: string, throttle: boolean): void {
+    if (!windowId) return;
+
+    const coalesce = this.outputCoalesceState.get(windowId);
+    if (!coalesce) return;
+
+    if (throttle) {
+      // Client is saturated — pause the coalescing timer so output
+      // accumulates in the ring buffer until backpressure is released
+      if (coalesce.timer) {
+        clearTimeout(coalesce.timer);
+        coalesce.timer = null;
+      }
+    } else {
+      // Backpressure released — flush any accumulated output immediately
+      if (coalesce.buffer) {
+        this.broadcastToWindow(windowId, {
+          type: 'window:output',
+          windowId,
+          data: coalesce.buffer,
+          seq: coalesce.seq,
+        });
+        coalesce.buffer = '';
+      }
+    }
   }
 
   private handleWindowRename(connection: Connection, windowId: string, name: string): void {
@@ -1113,12 +1198,34 @@ export class ConnectionManager {
           const ringBuffer = this.getOrCreateRingBuffer(windowId);
           const seq = ringBuffer.append(data);
 
-          this.broadcastToWindow(windowId, {
-            type: 'window:output',
-            windowId,
-            data,
-            seq,
-          });
+          // Coalesce PTY chunks within 8ms window before sending
+          // Single keystrokes deliver in ≤8ms; during Claude Code bursts,
+          // 3-8 PTY chunks coalesce into one WebSocket message
+          let coalesce = this.outputCoalesceState.get(windowId);
+          if (!coalesce) {
+            coalesce = { buffer: '', timer: null, seq: 0 };
+            this.outputCoalesceState.set(windowId, coalesce);
+          }
+          coalesce.buffer += data;
+          coalesce.seq = seq; // Always use latest seq
+
+          if (coalesce.timer === null) {
+            coalesce.timer = setTimeout(() => {
+              const state = this.outputCoalesceState.get(windowId);
+              if (state && state.buffer) {
+                this.broadcastToWindow(windowId, {
+                  type: 'window:output',
+                  windowId,
+                  data: state.buffer,
+                  seq: state.seq,
+                });
+                state.buffer = '';
+              }
+              if (state) {
+                state.timer = null;
+              }
+            }, 8);
+          }
 
           // Get any active connection for this window to check automation
           const firstConnection = Array.from(this.connections.values()).find(
@@ -1175,6 +1282,13 @@ export class ConnectionManager {
       if (pendingResize) {
         clearTimeout(pendingResize.timer);
         this.pendingResizes.delete(windowId);
+      }
+
+      // Cancel any pending coalesce timer (prevents orphaned broadcasts)
+      const coalesce = this.outputCoalesceState.get(windowId);
+      if (coalesce) {
+        if (coalesce.timer) clearTimeout(coalesce.timer);
+        this.outputCoalesceState.delete(windowId);
       }
     }
 

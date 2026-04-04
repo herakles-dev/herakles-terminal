@@ -83,6 +83,13 @@ export interface TerminalCoreProps {
    * Optional: Health monitor for proactive GPU memory management
    */
   healthMonitor?: WebGLHealthMonitor;
+
+  /**
+   * Optional: Called when scroll events exceed 100/sec (storm detected)
+   * or drop below 50/sec for 2 seconds (storm cleared).
+   * Allows OutputPipelineManager to force heavy throttle during storms.
+   */
+  onScrollStorm?: (terminalId: string, active: boolean) => void;
 }
 
 /**
@@ -173,6 +180,7 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
       onRecoveryEnd,
       isRecovering,
       healthMonitor,
+      onScrollStorm,
     } = props;
 
     // Hook 1: Core terminal lifecycle
@@ -244,6 +252,38 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
             onData(data);
           });
 
+          // Step 3B: Scroll storm detection — monitor scroll frequency
+          // >100/sec triggers storm, <50/sec for 2s clears it
+          let scrollCount = 0;
+          let scrollStormActive = false;
+          let scrollResetTimer: ReturnType<typeof setInterval> | null = null;
+          let scrollClearTimer: ReturnType<typeof setTimeout> | null = null;
+          const scrollDisposable = term.onScroll(() => {
+            scrollCount++;
+          });
+          scrollResetTimer = setInterval(() => {
+            if (scrollCount > 100 && !scrollStormActive) {
+              scrollStormActive = true;
+              onScrollStorm?.(terminalId, true);
+              if (scrollClearTimer) clearTimeout(scrollClearTimer);
+              scrollClearTimer = null;
+            } else if (scrollCount < 50 && scrollStormActive) {
+              // Start 2-second recovery timer
+              if (!scrollClearTimer) {
+                scrollClearTimer = setTimeout(() => {
+                  scrollStormActive = false;
+                  onScrollStorm?.(terminalId, false);
+                  scrollClearTimer = null;
+                }, 2000);
+              }
+            } else if (scrollCount >= 50 && scrollClearTimer) {
+              // Rate went back up — cancel recovery
+              clearTimeout(scrollClearTimer);
+              scrollClearTimer = null;
+            }
+            scrollCount = 0;
+          }, 1000);
+
           // Step 4: NOW safe to fit - WebGL is ready
           fitAddon.fit();
 
@@ -272,6 +312,9 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
           // Store cleanup for when effect unmounts
           cleanupRef.current = () => {
             dataDisposable.dispose();
+            scrollDisposable.dispose();
+            if (scrollResetTimer) clearInterval(scrollResetTimer);
+            if (scrollClearTimer) clearTimeout(scrollClearTimer);
             disposeRenderer();
             unregister?.();
           };
@@ -310,7 +353,14 @@ export const TerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>(
         get fitAddon() { return fitAddonRef.current; },
         get renderError() { return renderErrorRef.current; },
         write: (data: string) => {
-          terminalRef.current?.write(data);
+          // DEC mode 2026: batch writes as one atomic render pass.
+          // Reduces partial-frame flicker during high-frequency output.
+          // If xterm.js doesn't support it, the escape sequences are silently ignored.
+          // ATOMICITY: A single term.write(str) call pushes to xterm's internal
+          // write queue as one unit. fit() and write() both enqueue synchronously,
+          // so interleaving is impossible within a single concatenated string.
+          // Do NOT split this into multiple write() calls.
+          terminalRef.current?.write('\x1b[?2026h' + data + '\x1b[?2026l');
         },
         fit: () => {
           fitAddonRef.current?.fit();

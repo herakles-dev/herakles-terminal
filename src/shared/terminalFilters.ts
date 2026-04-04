@@ -8,14 +8,14 @@
  * Comprehensive ANSI/terminal escape sequence regex.
  * Matches all standard terminal escape sequences for stripping during analysis.
  *
- * Covers:
- * - CSI sequences: \x1b[...letter/~ (including ?, !, > intermediates)
- * - 8-bit CSI:     \x9b...letter/~
- * - OSC sequences: \x1b]...BEL or \x1b]...\x1b\\
- * - DCS sequences: \x1bP...\x1b\\
- * - Simple 2-char: \x1b followed by any single character
+ * Uses ECMA-48 byte ranges:
+ * - CSI: ESC [ (parameter bytes 0x30-0x3F)* (intermediate bytes 0x20-0x2F)* (final byte 0x40-0x7E)
+ * - 8-bit CSI: 0x9B followed by same parameter/intermediate/final structure
+ * - OSC: ESC ] ... (BEL | ST)  — lazy match to avoid eating content on unterminated sequences
+ * - DCS/APC/PM: ESC P/_ /^ ... ST — with 4KB cap to prevent runaway on unterminated sequences
+ * - Simple 2-char: ESC + any single byte
  */
-export const ANSI_STRIP_REGEX = /(?:\x1b(?:\[[?!>]?[0-9;]*[a-zA-Z~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|P[^\x1b]*\x1b\\|.)|\x9b[0-9;]*[a-zA-Z~])/g;
+export const ANSI_STRIP_REGEX = /(?:\x1b(?:\[[\x20-\x3f]*[\x40-\x7e]|\][\s\S]*?(?:\x07|\x1b\\)|[P_^][\s\S]{0,4096}?\x1b\\|.)|\x9b[\x20-\x3f]*[\x40-\x7e])/g;
 
 /**
  * Strip all ANSI escape sequences from a string.
@@ -31,36 +31,44 @@ export function stripAnsi(str: string): string {
 function isThinkingLine(stripped: string): boolean {
   if (stripped.length === 0) return false;
 
-  // Filter lines that are ONLY dots and whitespace (e.g. "....." or ". . . .")
-  if (/^[.\s]+$/.test(stripped)) return true;
+  // Filter lines that are ONLY dots (ASCII period, middle dot, bullet, ellipsis) and whitespace.
+  // Intentionally EXCLUDES: U+22EE (⋮), U+22EF (⋯), U+2219 (∙), U+2027 (‧)
+  // — those are legitimate chars in exa/eza tree output, math CLIs, and hyphenation tools.
+  if (/^[.\s\u00B7\u2022\u2026]+$/.test(stripped)) return true;
 
-  // Filter consecutive dots (20+) — tmux SIGWINCH resize artifact
-  // Catches lines like "hello....................world" where dots are embedded in other content
+  // Filter consecutive dots (20+) — tmux SIGWINCH resize artifact.
+  // Threshold is 20 (not 10) to avoid false positives on:
+  //   ../../../../../../path (12 dots), pytest output, npm/pip progress bars.
   if (/\.{20,}/.test(stripped)) return true;
 
   // Filter braille spinner lines (pure braille or braille-prefixed like "⠋ Thinking...")
   if (/^[\u2800-\u28FF]/.test(stripped)) return true;
 
   // Defense-in-depth: filter lines predominantly composed of dots
-  // (catches cases where a few unstripped control chars remain)
+  // (catches cases where a few unstripped control chars remain).
+  // Exempt lines containing path separators, URLs, or structured content.
+  if (/[/\\:[\]#@]/.test(stripped)) return false;
   const dotCount = (stripped.match(/\./g) || []).length;
   const totalNonWhitespace = stripped.replace(/\s/g, '').length;
-  if (totalNonWhitespace > 0 && dotCount / totalNonWhitespace > 0.8 && dotCount >= 3) return true;
+  if (totalNonWhitespace > 0 && dotCount / totalNonWhitespace >= 0.8 && dotCount >= 3) return true;
 
   return false;
 }
 
 /**
+ * Regex to detect cursor positioning sequences used as split delimiters.
+ */
+const CURSOR_POSITION_REGEX = /^\x1b\[\d*(?:;\d*)?[Hf]$/;
+
+/**
  * Filter Claude Code thinking output from terminal data.
  * Removes dots, spinner characters, and braille lines.
  *
- * Used by:
- * - OutputPipelineManager (live streaming filter)
- * - App.tsx (restore/replay defense-in-depth filter)
- * - TmuxManager.capturePane (scrollback capture filter)
+ * Splits on BOTH newlines AND cursor positioning sequences so that
+ * tmux SIGWINCH re-render output is filtered per-row.
  */
 export function filterThinkingOutput(data: string): string {
-  const parts = data.split(/(\r\n|\r|\n)/);
+  const parts = data.split(/(\r\n|\r|\n|\x1b\[\d*(?:;\d*)?[Hf])/);
   const result: string[] = [];
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
@@ -68,9 +76,26 @@ export function filterThinkingOutput(data: string): string {
       result.push(part);
       continue;
     }
+    if (CURSOR_POSITION_REGEX.test(part)) {
+      result.push(part);
+      continue;
+    }
     const stripped = part.replace(ANSI_STRIP_REGEX, '').trim();
     if (stripped.length === 0) { result.push(part); continue; }
-    if (isThinkingLine(stripped)) continue;
+    if (isThinkingLine(stripped)) {
+      // Preserve DEC 2026 sync brackets to prevent dangling sync state
+      const hasSyncBegin = part.includes('\x1b[?2026h');
+      const hasSyncEnd = part.includes('\x1b[?2026l');
+      const syncPrefix = hasSyncBegin ? '\x1b[?2026h' : '';
+      const syncSuffix = hasSyncEnd ? '\x1b[?2026l' : '';
+
+      if (i > 0 && CURSOR_POSITION_REGEX.test(parts[i - 1])) {
+        result.push(syncPrefix + '\x1b[K' + syncSuffix);
+      } else if (syncPrefix || syncSuffix) {
+        result.push(syncPrefix + syncSuffix);
+      }
+      continue;
+    }
     result.push(part);
   }
   return result.join('');
@@ -78,16 +103,14 @@ export function filterThinkingOutput(data: string): string {
 
 /**
  * Carriage-return-based thinking filter.
- * Claude Code spinner uses \r to overwrite the same line: `\r⠋ Thinking...\r⠙ Thinking...`
- * When split by \r, only the LAST segment matters (it's what the user sees).
- * Filters out all \r-delimited segments that are thinking lines, keeping the final
- * non-thinking segment if any.
+ * Claude Code spinner uses \r to overwrite the same line.
+ * Filters out \r-delimited thinking segments, keeping the last non-thinking segment.
+ *
+ * Shell readline history cycling sends `\r\x1b[K` — preserved with leading \r.
  */
 export function filterCarriageReturnThinking(data: string): string {
-  // Only apply if data contains \r (without \n following) — the spinner pattern
   if (!data.includes('\r')) return data;
 
-  // Process each line independently (preserve \n-delimited structure)
   const lines = data.split(/(\r\n|\n)/);
   const result: string[] = [];
 
@@ -97,31 +120,42 @@ export function filterCarriageReturnThinking(data: string): string {
       continue;
     }
 
-    // Split on bare \r (not \r\n)
+    // Preserve bare \r (cursor positioning) — don't drop it
+    if (line === '\r') {
+      result.push(line);
+      continue;
+    }
+
     const segments = line.split('\r');
     if (segments.length <= 1) {
       result.push(line);
       continue;
     }
 
-    // Keep only the last non-thinking segment
-    // Claude spinner: \r⠋ Thinking...\r⠙ Thinking...\r (last segment is empty or final state)
     let kept: string | null = null;
+    let keptNeedsLeadingCR = false;
     for (let i = segments.length - 1; i >= 0; i--) {
       const seg = segments[i];
       const stripped = seg.replace(ANSI_STRIP_REGEX, '').trim();
-      if (stripped.length === 0) continue;
-      if (isThinkingLine(stripped)) continue;
-      // Found a non-thinking segment — keep it
+      if (stripped.length > 0 && isThinkingLine(stripped)) continue;
+      if (seg.length === 0) continue;
       kept = seg;
+      keptNeedsLeadingCR = i > 0;
       break;
     }
 
     if (kept !== null) {
-      result.push(kept);
+      result.push(keptNeedsLeadingCR ? '\r' + kept : kept);
     }
-    // If all segments are thinking lines, drop the entire line
   }
 
   return result.join('');
+}
+
+/**
+ * Two-stage filter: CR filter first, then line-based filter.
+ * Use this everywhere terminal output needs filtering (live, restore, replay).
+ */
+export function filterAllThinkingOutput(data: string): string {
+  return filterThinkingOutput(filterCarriageReturnThinking(data));
 }

@@ -4,6 +4,7 @@ import { filterThinkingOutput as sharedFilterThinkingOutput, filterCarriageRetur
 export interface OutputPipelineConfig {
   flushIntervalMs?: number;
   healthMonitor?: WebGLHealthMonitor;
+  isMobile?: boolean;
 }
 
 // Maximum buffer size before truncation (512KB)
@@ -13,12 +14,12 @@ const MAX_BUFFER_SIZE = 512 * 1024;
 const BACKPRESSURE_HIGH_WATERMARK = 0.8; // 80% - request throttle
 
 // Volume-based throttling constants (Phase 2: bytes/sec instead of flushes/sec)
-// These thresholds correlate with GPU memory pressure better than frequency
+// Thresholds tuned to catch Claude Code Ink redraws at 10-40KB/s
 const THROTTLE_WINDOW_MS = 1000;
-const BYTES_PER_SEC_LIGHT = 50_000;    // 50KB/sec - normal Claude thinking
-const BYTES_PER_SEC_HEAVY = 150_000;   // 150KB/sec - build output
-const BYTES_PER_SEC_CRITICAL = 500_000; // 500KB/sec - catastrophic output
-const LIGHT_THROTTLE_DELAY = 32;       // ~30fps
+const BYTES_PER_SEC_LIGHT = 20_000;    // 20KB/sec - Claude Code thinking/Ink redraws
+const BYTES_PER_SEC_HEAVY = 80_000;    // 80KB/sec - build output
+const BYTES_PER_SEC_CRITICAL = 250_000; // 250KB/sec - catastrophic output
+const LIGHT_THROTTLE_DELAY = 24;       // ~42fps - gentler throttle
 const HEAVY_THROTTLE_DELAY = 100;      // ~10fps
 const CRITICAL_THROTTLE_DELAY = 200;   // ~5fps
 
@@ -44,15 +45,17 @@ interface WindowOutputState {
   throttleMode: 'normal' | 'light' | 'heavy' | 'critical';
   // Post-resize suppression: timestamp when resize-pending was last cleared
   postResizeSuppressUntil: number;
+  // Ink redraw coalescing: detect rapid erase+home sequences
+  lastEraseHomeTime: number;
+  eraseHomeCount: number;
 }
 
 export type FlushCallback = (windowId: string, data: string) => void;
 export type ReplayRequestCallback = (windowId: string, afterSeq: number) => void;
 export type BackpressureCallback = (windowId: string, throttle: boolean) => void;
 
-// Re-export shared filter for backward compatibility
-// (App.tsx imports { filterThinkingOutput } from this module)
-export { filterThinkingOutput, filterCarriageReturnThinking } from '@shared/terminalFilters';
+// Re-export shared filters
+export { filterThinkingOutput, filterCarriageReturnThinking, filterAllThinkingOutput } from '@shared/terminalFilters';
 
 export class OutputPipelineManager {
   private windows: Map<string, WindowOutputState> = new Map();
@@ -61,10 +64,13 @@ export class OutputPipelineManager {
   private onBackpressure?: BackpressureCallback;
   private healthMonitor?: WebGLHealthMonitor;
   private forcedThrottleMode?: 'light' | 'heavy' | 'critical';
+  // Mobile devices get 50% lower thresholds (weaker GPUs)
+  private readonly thresholdScale: number;
 
   constructor(onFlush: FlushCallback, config?: OutputPipelineConfig) {
     this.onFlush = onFlush;
     this.healthMonitor = config?.healthMonitor;
+    this.thresholdScale = config?.isMobile ? 0.5 : 1.0;
   }
 
   /**
@@ -124,6 +130,8 @@ export class OutputPipelineManager {
         flushCountInWindow: 0,
         throttleMode: 'normal',
         postResizeSuppressUntil: 0,
+        lastEraseHomeTime: 0,
+        eraseHomeCount: 0,
       };
       this.windows.set(windowId, state);
     }
@@ -154,13 +162,13 @@ export class OutputPipelineManager {
     const effectiveElapsed = Math.max(windowElapsed, 1); // Avoid division by zero
     const bytesPerSec = (state.bytesInWindow / effectiveElapsed) * 1000;
 
-    // Update throttle mode based on byte rate
+    // Update throttle mode based on byte rate (scaled for mobile)
     const prevMode = state.throttleMode;
-    if (bytesPerSec > BYTES_PER_SEC_CRITICAL) {
+    if (bytesPerSec > BYTES_PER_SEC_CRITICAL * this.thresholdScale) {
       state.throttleMode = 'critical';
-    } else if (bytesPerSec > BYTES_PER_SEC_HEAVY) {
+    } else if (bytesPerSec > BYTES_PER_SEC_HEAVY * this.thresholdScale) {
       state.throttleMode = 'heavy';
-    } else if (bytesPerSec > BYTES_PER_SEC_LIGHT) {
+    } else if (bytesPerSec > BYTES_PER_SEC_LIGHT * this.thresholdScale) {
       state.throttleMode = 'light';
     } else {
       state.throttleMode = 'normal';
@@ -247,6 +255,17 @@ export class OutputPipelineManager {
     return sharedFilterThinkingOutput(crFiltered);
   }
 
+  /**
+   * Detect Ink (React for CLI) full-screen redraws.
+   * Ink issues CSI erase (\x1b[2J or \x1b[J) followed by cursor home (\x1b[H).
+   * Each redraw rewrites the entire visible buffer — only the last frame matters.
+   */
+  private detectInkRedraw(data: string): boolean {
+    // Only match full screen erase (\x1b[2J) + cursor home (\x1b[H).
+    // Excludes \x1b[J (erase below) — used by non-Ink programs (vim, ncurses).
+    return /\x1b\[2J[\s\S]*?\x1b\[H/.test(data);
+  }
+
   enqueue(windowId: string, data: string, seq?: number): void {
     const state = this.getOrCreateState(windowId);
 
@@ -274,6 +293,32 @@ export class OutputPipelineManager {
       filtered = this.filterThinkingOutput(filtered);
     }
 
+    // Ink redraw coalescing: when Claude Code's Ink framework issues rapid
+    // full-screen redraws (erase+home), replace buffer instead of appending.
+    // Each redraw supersedes the previous — only the last frame matters.
+    if (this.detectInkRedraw(filtered)) {
+      const now = performance.now();
+      if (now - state.lastEraseHomeTime < 50) {
+        // Rapid redraw within 50ms — replace buffer contents
+        state.buffer = filtered;
+        state.eraseHomeCount++;
+        state.lastEraseHomeTime = now;
+        // Escalate throttle if too many redraws per window
+        if (state.eraseHomeCount > 3 && state.throttleMode === 'normal') {
+          state.throttleMode = 'light';
+        }
+        // Track bytes for throttle calculation
+        state.bytesInWindow += filtered.length;
+        this.scheduleFlush(windowId);
+        return;
+      }
+      state.lastEraseHomeTime = now;
+      state.eraseHomeCount = 1;
+    } else {
+      // Reset redraw count on non-redraw data
+      state.eraseHomeCount = 0;
+    }
+
     if (state.resizePending) {
       state.pendingResizeBuffer += filtered;
       // Enforce buffer limit for pending resize buffer too
@@ -287,11 +332,16 @@ export class OutputPipelineManager {
 
     state.buffer += filtered;
 
-    // Enforce buffer size limit - keep newest data by trimming from the start
+    // Enforce buffer size limit — keep newest data by trimming from the start.
+    // Advance trim point past any split ANSI escape or UTF-16 surrogate pair.
     if (state.buffer.length > MAX_BUFFER_SIZE) {
-      const excess = state.buffer.length - MAX_BUFFER_SIZE;
-      state.buffer = state.buffer.slice(excess);
-      console.warn(`[OutputPipeline] ${windowId}: Buffer truncated, discarded ${excess} bytes`);
+      let trimAt = state.buffer.length - MAX_BUFFER_SIZE;
+      // Skip past split surrogates (lone low surrogate at trim point)
+      const ch = state.buffer.charCodeAt(trimAt);
+      if (ch >= 0xDC00 && ch <= 0xDFFF) trimAt++;
+      // Skip past mid-ANSI escape: if we're inside an escape, advance to next ESC or newline
+      if (trimAt > 0 && state.buffer[trimAt - 1] === '\x1b') trimAt++;
+      state.buffer = state.buffer.slice(trimAt);
     }
 
     // Backpressure signaling
@@ -320,6 +370,9 @@ export class OutputPipelineManager {
 
   setResizePending(windowId: string, pending: boolean): void {
     const state = this.getOrCreateState(windowId);
+    // Idempotency: skip if already in the requested state.
+    // Prevents duplicate acks from re-triggering buffer merge + suppression window.
+    if (!pending && !state.resizePending) return;
     state.resizePending = pending;
 
     if (!pending) {
@@ -469,6 +522,11 @@ export class OutputPipelineManager {
     state.postResizeSuppressUntil = 0;
     state.flushCountInWindow = 0;
     state.windowStartTime = performance.now();
+    // Release backpressure — server may still be throttling sends to this client
+    if (state.backpressureActive) {
+      state.backpressureActive = false;
+      this.onBackpressure?.(windowId, false);
+    }
     // Preserve lastProcessedSeq for potential reconnect replay
   }
 

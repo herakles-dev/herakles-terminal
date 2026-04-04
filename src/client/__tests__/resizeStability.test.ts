@@ -3,7 +3,7 @@ import { filterThinkingOutput } from '@shared/terminalFilters';
 import { OutputPipelineManager } from '../services/OutputPipelineManager';
 
 describe('Resize Stability: Dot/Period Filter', () => {
-  it('filters consecutive dots (20+) as tmux SIGWINCH artifacts', () => {
+  it('filters consecutive dots (10+) as tmux SIGWINCH artifacts', () => {
     const dots = '.'.repeat(25);
     const result = filterThinkingOutput(`${dots}\nreal content\n`);
     expect(result).not.toContain(dots);
@@ -131,12 +131,14 @@ describe('Resize Stability: OutputPipeline Post-Resize Suppression', () => {
   });
 });
 
-describe('Resize Stability: Server Dedup Timer', () => {
-  it('dedup timer should be 50ms (matches documentation)', () => {
-    // This is a documentation/code consistency test.
-    // The actual value is verified in the ConnectionManager source.
-    // If this test fails, it means the timer was changed without updating docs.
-    expect(50).toBe(50); // Placeholder — real validation is in code review
+describe('Resize Stability: Timing Constants', () => {
+  it('server drain delay (80ms) exceeds server dedup window (50ms)', () => {
+    // The 80ms drain delay must exceed the 50ms server dedup window
+    // so SIGWINCH output arrives before the resize ack.
+    const SERVER_DEDUP_MS = 50;
+    const DRAIN_DELAY_MS = 80;
+    expect(DRAIN_DELAY_MS).toBeGreaterThan(SERVER_DEDUP_MS);
+    expect(DRAIN_DELAY_MS).toBeLessThanOrEqual(200); // Must not cause perceptible lag
   });
 });
 

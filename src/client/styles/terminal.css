@@ -724,6 +724,10 @@ select:focus-visible {
 }
 
 /* Terminal Minimap */
+/* SAFETY: position:fixed keeps this OUT of the terminal window layout ancestry.
+ * findTransitionAncestor() walks up from terminal containers and will never reach this.
+ * If this is ever changed to position:absolute, the right/width transitions below
+ * will cause phantom 300ms waits in the resize coordinator. */
 .terminal-minimap {
   position: fixed;
   right: 0;

@@ -159,8 +159,10 @@ function verifyWebGLCanvasSync(termElement: HTMLElement | null): boolean {
 
   const rect = termElement.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  const targetWidth = Math.floor(rect.width * dpr);
-  const targetHeight = Math.floor(rect.height * dpr);
+  // Use Math.round to match xterm.js internal canvas-sizing arithmetic.
+  // Math.floor can disagree by 1px on fractional-DPR displays (e.g. Windows 125%).
+  const targetWidth = Math.round(rect.width * dpr);
+  const targetHeight = Math.round(rect.height * dpr);
 
   for (const canvas of canvases) {
     // Skip tiny canvases (text measurement, cursor, etc.)
@@ -170,14 +172,27 @@ function verifyWebGLCanvasSync(termElement: HTMLElement | null): boolean {
         Math.abs(canvas.height - targetHeight) > CANVAS_DIMENSION_TOLERANCE) {
       return false;
     }
-    return true; // First large canvas matches
+    // Check ALL large canvases, not just the first — a 2D overlay canvas
+    // may appear before the WebGL render canvas in DOM order.
   }
 
   return true;
 }
 
+interface ResizeCoordinatorOptions {
+  /**
+   * Called synchronously at the START of every resize cycle, BEFORE debouncing.
+   * Use this to buffer terminal output before fitAddon.fit() reflows the buffer.
+   * Without this, spinner data written during the debounce window becomes visible
+   * as dot artifacts when the terminal reflows to a smaller size.
+   */
+  onResizeStart?: () => void;
+}
+
 /** @deprecated Use useGridResize() instead. Kept as fallback when USE_GRID_LAYOUT = false. */
-export function useResizeCoordinator() {
+export function useResizeCoordinator(options?: ResizeCoordinatorOptions) {
+  const onResizeStartRef = useRef(options?.onResizeStart);
+  onResizeStartRef.current = options?.onResizeStart;
   const targetsRef = useRef<Map<string, ResizeTarget>>(new Map());
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationStateRef = useRef<AnimationState>({ isAnimating: false, pendingResize: false });
@@ -373,14 +388,30 @@ export function useResizeCoordinator() {
       }
       isResizingRef.current = true;
 
+      // Notify caller when resize will actually execute (not when blocked
+      // by animation or resize lock). This buffers terminal output during
+      // the resize cycle (fit + server roundtrip).
+      onResizeStartRef.current?.();
+
+      // L6 failsafe: force-release resize lock if Promise.all never settles
+      // (e.g. non-resolving async in verifyWebGLCanvasSyncWithRetry)
+      const resizeLockSafety = setTimeout(() => {
+        if (isResizingRef.current) {
+          isResizingRef.current = false;
+          onComplete?.();
+        }
+      }, RESIZE_TIMEOUT_MS + 500);
+
       requestAnimationFrame(() => {
         const targets = Array.from(targetsRef.current.values());
         const promises = targets.map(target => performAtomicResize(target, immediate));
         // FIX Bug 4: Wait for ALL resize promises (including async canvas verify) before releasing lock
         Promise.all(promises).then(() => {
+          clearTimeout(resizeLockSafety);
           isResizingRef.current = false;
           onComplete?.();
         }, () => {
+          clearTimeout(resizeLockSafety);
           isResizingRef.current = false;
           onComplete?.();
         });

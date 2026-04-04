@@ -25,8 +25,12 @@ export type ClientMessageType =
   | 'window:resize'
   | 'window:layout'
   | 'window:replay'
+  | 'window:backpressure'
   | 'input'
-  | 'ping';
+  | 'ping'
+  | 'stop:activate'
+  | 'stop:subscribe'
+  | 'stop:unsubscribe';
 
 export interface AuthMessage {
   type: 'auth';
@@ -101,6 +105,7 @@ export type ClientMessage =
   | WindowResizeMessage
   | WindowLayoutMessage
   | WindowReplayMessage
+  | WindowBackpressureMessage
   | InputMessage
   | PingMessage;
 
@@ -191,6 +196,12 @@ export interface WindowReplayMessage {
   type: 'window:replay';
   windowId: string;
   afterSeq: number;
+}
+
+export interface WindowBackpressureMessage {
+  type: 'window:backpressure';
+  windowId: string;
+  throttle: boolean;
 }
 
 export interface WindowReplayResponseMessage {
@@ -340,6 +351,9 @@ export function isValidClientMessage(message: unknown): message is ClientMessage
     'window:replay',
     'input',
     'ping',
+    'stop:activate',
+    'stop:subscribe',
+    'stop:unsubscribe',
   ];
 
   return typeof msg.type === 'string' && validTypes.includes(msg.type as ClientMessageType);

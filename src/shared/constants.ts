@@ -65,5 +65,11 @@ export const QUICK_KEYS = [
  * v1 SplitView remains the stable production path. */
 export const USE_GRID_LAYOUT = false;
 
+/** Feature flag: use DOM-based terminal renderer instead of xterm.js WebGL canvas.
+ * v2.0.0: DOM renderer renders terminal output as div rows + span styled runs.
+ * CSS handles resize natively — no fitAddon, no canvas, no timing races.
+ * xterm.js core (parser + buffer) still runs headless underneath. */
+export const USE_DOM_RENDERER = true;
+
 export { THEMES, getTheme, getThemeNames, validateTheme } from './themes.js';
 export type { ThemeName } from './themes.js';

@@ -16,59 +16,136 @@
     "PreToolUse": [
       {
         "matcher": "Read",
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/detect-project"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/detect-project"
+          }
+        ]
       },
       {
         "matcher": "Write|Edit",
         "hooks": [
-          {"type": "command", "command": "/home/hercules/v11/hooks/guard-write-gates"},
-          {"type": "command", "command": "/home/hercules/v11/hooks/guard-enforcement"}
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/guard-write-gates"
+          },
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/guard-enforcement"
+          }
         ]
       },
       {
         "matcher": "Bash",
         "hooks": [
-          {"type": "command", "command": "/home/hercules/v11/hooks/guard-enforcement"},
-          {"type": "command", "command": "/home/hercules/v11/hooks/enforce-test-coverage"}
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/guard-enforcement"
+          },
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/enforce-test-coverage"
+          }
         ]
       },
       {
         "matcher": "Task",
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/guard-effort"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/guard-effort"
+          }
+        ]
+      },
+      {
+        "matcher": "TeamCreate|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/fix-team-model"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
         "hooks": [
-          {"type": "command", "command": "/home/hercules/v11/hooks/verify-syntax"},
-          {"type": "command", "command": "/home/hercules/v11/hooks/track-autonomy"}
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/verify-syntax"
+          },
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/track-autonomy"
+          }
         ]
       },
       {
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/track-autonomy"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/track-autonomy"
+          }
+        ]
       },
       {
-        "matcher": "TaskCreate|TaskUpdate|TaskList",
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/sync-tasks"}]
+        "matcher": "TaskCreate|TaskUpdate|TaskList|TaskGet",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/sync-tasks"
+          }
+        ]
       },
       {
         "matcher": "TaskList",
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/guard-teammate-timeout"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/guard-teammate-timeout"
+          }
+        ]
       },
       {
         "matcher": "Task",
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/track-agents"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/track-agents"
+          }
+        ]
       },
       {
         "matcher": "TeamCreate|Agent",
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/fix-team-model"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/fix-team-model"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/post-compact"
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "hooks": [{"type": "command", "command": "/home/hercules/v11/hooks/session-end"}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/v11/hooks/session-end"
+          }
+        ]
       }
     ]
   },
