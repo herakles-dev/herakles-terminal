@@ -4,3 +4,7 @@ export { TerminalCursor } from './Cursor.js';
 export type { CursorStyle } from './Cursor.js';
 export { measureCharDimensions, calculateTerminalDimensions, invalidateFontCache } from './measureFont.js';
 export type { CharDimensions } from './measureFont.js';
+export { detectLinks } from './linkDetector.js';
+export type { DetectedLink } from './linkDetector.js';
+export { VirtualScroller, OVERSCAN } from './VirtualScroller.js';
+export type { VirtualScrollerOptions, ViewportRange } from './VirtualScroller.js';

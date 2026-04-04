@@ -6,20 +6,32 @@
  * - ScreenBuffer reads xterm's buffer into a packed Int32Array
  * - DomRenderer patches DOM rows/spans based on dirty row diffs
  * - TerminalCursor renders an absolutely positioned blinking cursor
+ * - VirtualScroller manages scrollback: wheel events → viewport offset → buffer slice
  * - ResizeObserver → measureFont → term.resize() → SIGWINCH
  *
  * No canvas, no fitAddon, no WebGL, no timing races. CSS handles resize natively.
+ *
+ * Scroll flow:
+ *   wheel event → VirtualScroller.handleWheel() → scrollOffset changes
+ *   → scheduleFullRender() → performRender() reads buffer at getViewportRange().startLine
+ *   → cursor hidden when scrolled up, shown at bottom
  */
 
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { THEMES, getTheme, TERMINAL_DEFAULTS, MOBILE_CONSTANTS } from '@shared/constants';
 import { ScreenBuffer, CharPool, StylePool } from '../../renderer/ScreenBuffer.js';
 import { DomRenderer } from '../../renderer/DomRenderer.js';
 import { TerminalCursor } from '../../renderer/Cursor.js';
-import { measureCharDimensions, calculateTerminalDimensions, invalidateFontCache } from '../../renderer/measureFont.js';
+import { VirtualScroller } from '../../renderer/VirtualScroller.js';
+import {
+  measureCharDimensions,
+  calculateTerminalDimensions,
+  invalidateFontCache,
+} from '../../renderer/measureFont.js';
 import type { TerminalCoreProps, TerminalCoreHandle } from '../TerminalCore/TerminalCore';
 import type { FitAddon } from '@xterm/addon-fit';
+import { SearchOverlay } from '../SearchOverlay/index.js';
 
 const PADDING = 4;
 // Debounce delay for ResizeObserver: coalesces rapid container size changes during
@@ -53,6 +65,22 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     const scheduleRenderRef = useRef<(() => void) | null>(null);
     const cleanupRef = useRef<(() => void) | null>(null);
     const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // VirtualScroller — manages scrollback viewport offset and scrollbar
+    const virtualScrollerRef = useRef<VirtualScroller | null>(null);
+    // Reference to the .dom-term-viewport element so setTheme() can update CSS variables
+    // on it directly — enabling instant theme switching without clearing the style cache.
+    const viewportRef = useRef<HTMLElement | null>(null);
+
+    // ---------------------------------------------------------------------------
+    // Search overlay state
+    // ---------------------------------------------------------------------------
+    const [searchVisible, setSearchVisible] = useState(false);
+
+    const handleSearchClose = useCallback(() => {
+      setSearchVisible(false);
+      // Return focus to the terminal after closing search
+      requestAnimationFrame(() => termRef.current?.focus());
+    }, []);
 
     useEffect(() => {
       const outer = outerRef.current;
@@ -79,10 +107,15 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         visibleContainer.className = 'dom-term-viewport';
         visibleContainer.style.cssText = `position:absolute;top:${PADDING}px;left:${PADDING}px;right:${PADDING}px;bottom:${PADDING}px;font-family:${fontFamily};font-size:${fontSize}px;line-height:${lineHeight}px;overflow:hidden`;
         outer.appendChild(visibleContainer);
+        // Store viewport reference for CSS-variable-based theme switching
+        viewportRef.current = visibleContainer;
 
         // --- xterm.js headless ---
         const term = new XTerm({
-          cols, rows, fontSize, fontFamily,
+          cols,
+          rows,
+          fontSize,
+          fontFamily,
           scrollback: TERMINAL_DEFAULTS.scrollback,
           allowTransparency: false,
           cursorBlink: false,
@@ -94,9 +127,16 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         termRef.current = term;
 
         // Hide xterm's canvases
-        hiddenContainer.querySelectorAll('canvas').forEach(c => { c.style.display = 'none'; });
+        hiddenContainer.querySelectorAll('canvas').forEach((c) => {
+          c.style.display = 'none';
+        });
 
-        if (cancelled) { term.dispose(); hiddenContainer.remove(); visibleContainer.remove(); return; }
+        if (cancelled) {
+          term.dispose();
+          hiddenContainer.remove();
+          visibleContainer.remove();
+          return;
+        }
 
         // --- Rows container (below textarea) ---
         const rowsContainer = document.createElement('div');
@@ -106,7 +146,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
         const renderer = new DomRenderer(rowsContainer);
         const themeConfig = THEMES[theme] ?? THEMES['dark']!;
-        renderer.setTheme(themeConfig);
+        renderer.setTheme(themeConfig, visibleContainer);
         renderer.setLineHeight(lineHeight);
         rendererRef.current = renderer;
 
@@ -117,6 +157,16 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         cursor.setBlink(true);
         cursorRef.current = cursor;
 
+        // --- VirtualScroller ---
+        // Constructed after visibleContainer exists. Appends a scrollbar div inside
+        // visibleContainer and listens for wheel events on it.
+        const scroller = new VirtualScroller(visibleContainer, renderer, {
+          viewportRows: rows,
+          maxScrollback: TERMINAL_DEFAULTS.scrollback,
+        });
+        scroller.setTerminal(term);
+        virtualScrollerRef.current = scroller;
+
         // --- Textarea for keyboard input (on top, desktop only) ---
         // On mobile, MobileInputHandler (a sibling in App.tsx) handles all input via
         // onData. Reparenting xterm's textarea into the visible layer on mobile causes
@@ -125,17 +175,20 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // Fix: on mobile we leave the textarea inside hiddenContainer (pointer-events:none)
         // so it is invisible to the virtual keyboard. MobileInputHandler is the sole
         // input path on mobile.
-        const isMobileDevice = /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent)
-          || navigator.maxTouchPoints > 0 && window.innerWidth < MOBILE_CONSTANTS.breakpoint;
+        const isMobileDevice =
+          /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+          (navigator.maxTouchPoints > 0 && window.innerWidth < MOBILE_CONSTANTS.breakpoint);
         const textarea = hiddenContainer.querySelector('textarea');
         if (textarea) {
           if (isMobileDevice) {
             // Keep textarea hidden — disable pointer-events so the virtual keyboard
             // cannot attach to it and trigger xterm's internal input pipeline.
-            textarea.style.cssText = 'position:absolute;width:0;height:0;opacity:0;pointer-events:none';
+            textarea.style.cssText =
+              'position:absolute;width:0;height:0;opacity:0;pointer-events:none';
           } else {
             // Desktop: reparent into visible layer so xterm captures keyboard focus.
-            textarea.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;z-index:30;cursor:text;pointer-events:auto';
+            textarea.style.cssText =
+              'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;z-index:30;cursor:text;pointer-events:auto';
             visibleContainer.appendChild(textarea);
           }
         }
@@ -153,17 +206,30 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         backBufferRef.current = back;
 
         // --- Render pipeline ---
-        // Always full-buffer diff for stability. Shell history cycling, cursor
-        // movement, and line clearing produce complex sequences where onRender
-        // row hints can miss affected rows. Correctness > performance.
+        // When scrolled up, we read from an explicit buffer startLine rather than
+        // xterm's internal viewportY (which is always 0 for the active viewport).
+        // The cursor is hidden when not at the bottom, since its position is
+        // reported relative to the live viewport, not the scrolled view.
         function performRender(): void {
           const t = termRef.current;
           const r = rendererRef.current;
+          const s = virtualScrollerRef.current;
           const frontBuf = frontBufferRef.current;
           const backBuf = backBufferRef.current;
           if (!t || !r || !frontBuf || !backBuf) return;
 
-          backBuf.readFromXTermBuffer(t.buffer.active, t.cols, t.rows);
+          // Determine which buffer slice to render
+          let startLine: number | undefined;
+          if (s && !s.isAtBottom()) {
+            const range = s.getViewportRange();
+            startLine = range.startLine;
+          }
+
+          backBuf.readFromXTermBuffer(t.buffer.active, t.cols, t.rows, startLine);
+
+          // Hide cursor when scrolled into scrollback history
+          const atBottom = !s || s.isAtBottom();
+          cursor.setVisible(atBottom);
 
           if (dirtyFullRef.current) {
             r.renderAll(backBuf);
@@ -177,7 +243,10 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           }
 
           frontBuf.copyFrom(backBuf);
-          cursor.setPosition(t.buffer.active.cursorX, t.buffer.active.cursorY);
+
+          if (atBottom) {
+            cursor.setPosition(t.buffer.active.cursorX, t.buffer.active.cursorY);
+          }
         }
 
         function scheduleRender(): void {
@@ -198,21 +267,44 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         scheduleRenderRef.current = scheduleRender;
 
         // --- xterm events ---
-        // onRender fires after xterm commits a complete batch to the buffer
-        const renderDisposable = term.onRender(() => scheduleRender());
+        // onRender fires after xterm commits a complete batch to the buffer.
+        // Notify VirtualScroller about new output so it can track scrollback growth
+        // and auto-scroll to bottom when pinned.
+        const renderDisposable = term.onRender((_e) => {
+          if (virtualScrollerRef.current) {
+            // xterm's buffer length changes when new lines are added.
+            // We pass 0 for now — onNewOutput only needs to know that something arrived;
+            // it re-reads totalLines internally from term.buffer.active.length.
+            virtualScrollerRef.current.onNewOutput(0);
+          }
+          scheduleRender();
+        });
 
         const cursorDisposable = term.onCursorMove(() => {
           const buf = term.buffer.active;
-          cursor.setPosition(buf.cursorX, buf.cursorY);
+          if (!virtualScrollerRef.current || virtualScrollerRef.current.isAtBottom()) {
+            cursor.setPosition(buf.cursorX, buf.cursorY);
+          }
         });
 
         const dataDisposable = term.onData((data) => onData(data));
 
-        // Scroll events (user scrolling through scrollback)
-        const scrollDisposable = term.onScroll(() => scheduleFullRender());
+        // xterm's own scroll events (e.g. term.scrollLines()) — sync our scroller
+        // and trigger a full render so the view updates immediately.
+        const scrollDisposable = term.onScroll(() => {
+          // When xterm scrolls programmatically (e.g. new output pushes viewport),
+          // let VirtualScroller handle the auto-scroll logic, then force a render.
+          if (virtualScrollerRef.current?.isAtBottom()) {
+            virtualScrollerRef.current.scrollToBottom();
+          }
+          scheduleFullRender();
+        });
 
-        // Buffer switch (normal ↔ alternate screen)
-        const bufferChangeDisposable = term.buffer.onBufferChange(() => scheduleFullRender());
+        // Buffer switch (normal ↔ alternate screen) — always snap to bottom
+        const bufferChangeDisposable = term.buffer.onBufferChange(() => {
+          virtualScrollerRef.current?.scrollToBottom();
+          scheduleFullRender();
+        });
 
         // --- ResizeObserver ---
         // Debounced to coalesce rapid container changes during SplitView drag.
@@ -230,6 +322,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             frontBufferRef.current?.resize(dims.cols, dims.rows);
             backBufferRef.current?.resize(dims.cols, dims.rows);
             rendererRef.current?.ensureRows(dims.rows);
+            virtualScrollerRef.current?.setViewportRows(dims.rows);
             // RAF-batched full render (coalesces with onRender from term.resize)
             scheduleFullRender();
             onResize?.(dims.cols, dims.rows);
@@ -267,6 +360,8 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           scrollDisposable.dispose();
           bufferChangeDisposable.dispose();
           if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+          virtualScrollerRef.current?.dispose();
+          virtualScrollerRef.current = null;
           cursor.dispose();
           renderer.dispose();
           term.dispose();
@@ -287,9 +382,14 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     // Theme changes
     useEffect(() => {
       const themeConfig = THEMES[theme] ?? THEMES['dark']!;
-      rendererRef.current?.setTheme(themeConfig);
+      // Pass viewportRef so setTheme() updates CSS variables — spans recolor
+      // instantly without clearing the style cache or re-rendering.
+      rendererRef.current?.setTheme(themeConfig, viewportRef.current ?? undefined);
       cursorRef.current?.setColor(themeConfig.cursor);
-      if (frontBufferRef.current && rendererRef.current) {
+      // Only re-render all rows when CSS vars are NOT active (first call before
+      // viewportRef is set, or fallback path). Once CSS vars are in use, the
+      // browser updates span colors automatically via the cascade.
+      if (!viewportRef.current && frontBufferRef.current && rendererRef.current) {
         rendererRef.current.renderAll(frontBufferRef.current);
       }
     }, [theme]);
@@ -315,6 +415,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         frontBufferRef.current?.resize(dims.cols, dims.rows);
         backBufferRef.current?.resize(dims.cols, dims.rows);
         rendererRef.current?.ensureRows(dims.rows);
+        virtualScrollerRef.current?.setViewportRows(dims.rows);
         dirtyFullRef.current = true;
         scheduleRenderRef.current?.();
         onResize?.(dims.cols, dims.rows);
@@ -324,9 +425,15 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     useImperativeHandle(
       ref,
       () => ({
-        get terminal() { return termRef.current; },
-        get fitAddon() { return null; },
-        get renderError() { return null; },
+        get terminal() {
+          return termRef.current;
+        },
+        get fitAddon() {
+          return null;
+        },
+        get renderError() {
+          return null;
+        },
         write: (data: string) => {
           // DEC 2026 synchronized output — prevents partial-frame reads
           termRef.current?.write('\x1b[?2026h' + data + '\x1b[?2026l');
@@ -340,6 +447,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
               frontBufferRef.current?.resize(dims.cols, dims.rows);
               backBufferRef.current?.resize(dims.cols, dims.rows);
               rendererRef.current?.ensureRows(dims.rows);
+              virtualScrollerRef.current?.setViewportRows(dims.rows);
               dirtyFullRef.current = true;
               scheduleRenderRef.current?.();
               onResize?.(dims.cols, dims.rows);
@@ -347,12 +455,17 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           }
         },
         focus: () => termRef.current?.focus(),
-        clear: () => termRef.current?.clear(),
+        clear: () => {
+          termRef.current?.clear();
+          // Snap back to bottom after clear
+          virtualScrollerRef.current?.scrollToBottom();
+        },
         setTheme: (themeName: string) => {
           const themeConfig = getTheme(themeName);
-          rendererRef.current?.setTheme(themeConfig);
+          rendererRef.current?.setTheme(themeConfig, viewportRef.current ?? undefined);
           cursorRef.current?.setColor(themeConfig.cursor);
-          if (frontBufferRef.current && rendererRef.current) {
+          // Re-render only when CSS vars are not active (viewportRef not yet set)
+          if (!viewportRef.current && frontBufferRef.current && rendererRef.current) {
             rendererRef.current.renderAll(frontBufferRef.current);
           }
           document.documentElement.style.setProperty('--terminal-bg', themeConfig.background);
@@ -366,6 +479,13 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
       <div
         ref={outerRef}
         onContextMenu={onContextMenu}
+        onKeyDown={(e) => {
+          // Ctrl+F — open search overlay (prevent browser default find)
+          if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === 'f') {
+            e.preventDefault();
+            setSearchVisible(true);
+          }
+        }}
         style={{
           position: 'relative',
           width: '100%',
@@ -377,7 +497,14 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         }}
         data-terminal-id={terminalId}
         data-renderer="dom"
-      />
+      >
+        <SearchOverlay
+          terminalRef={termRef}
+          rendererRef={rendererRef}
+          visible={searchVisible}
+          onClose={handleSearchClose}
+        />
+      </div>
     );
   }
 );

@@ -3,6 +3,11 @@
  *
  * Each row is a <div> with white-space:pre. Styled character runs are coalesced
  * into <span> elements. Only dirty rows are re-rendered (diff-based updates).
+ *
+ * Highlight overlay: call setHighlights() with character column ranges to wrap
+ * matching characters in .search-match / .search-match-active spans. Highlights
+ * are injected as a post-pass on the final HTML string so the normal rendering
+ * path is completely unchanged for rows with no matches.
  */
 
 import type { TerminalTheme } from '@shared/types';
@@ -41,6 +46,19 @@ interface StyleEntry {
   inlineStyle: string;
 }
 
+// ---------------------------------------------------------------------------
+// Highlight range type (exported for SearchOverlay)
+// ---------------------------------------------------------------------------
+
+export interface HighlightRange {
+  /** Row index in the visible viewport (0 = top visible row). */
+  line: number;
+  startCol: number;
+  endCol: number;
+  /** true = currently focused match (.search-match-active class) */
+  active: boolean;
+}
+
 export class DomRenderer {
   private container: HTMLElement;
   private rowElements: HTMLDivElement[] = [];
@@ -48,6 +66,21 @@ export class DomRenderer {
   private lineHeight = 0;
   // Instance-level palette — indices 0-15 are theme colors, 16-255 are static
   private ansiColors: string[];
+  // True once a viewportElement has been supplied to setTheme(). Enables the CSS-variable
+  // path in resolveColor() so generated spans reference var(--term-ansi-N) instead of
+  // hardcoded hex. This allows instant theme switching without clearing the style cache.
+  private cssVarsActive = false;
+
+  // ---------------------------------------------------------------------------
+  // Highlight overlay state
+  // ---------------------------------------------------------------------------
+  /** Per-row sorted highlight ranges. Cleared by clearHighlights(). */
+  private highlights = new Map<number, HighlightRange[]>();
+  /**
+   * Most recent buffer passed to renderAll/updateRows. Required so
+   * setHighlights() can re-render affected rows without a caller-supplied buffer.
+   */
+  private lastBuffer: ScreenBuffer | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -68,27 +101,54 @@ export class DomRenderer {
     }
   }
 
-  setTheme(theme: TerminalTheme): void {
-    // Update only instance palette indices 0-15
-    this.ansiColors[0] = theme.black;
-    this.ansiColors[1] = theme.red;
-    this.ansiColors[2] = theme.green;
-    this.ansiColors[3] = theme.yellow;
-    this.ansiColors[4] = theme.blue;
-    this.ansiColors[5] = theme.magenta;
-    this.ansiColors[6] = theme.cyan;
-    this.ansiColors[7] = theme.white;
-    this.ansiColors[8] = theme.brightBlack;
-    this.ansiColors[9] = theme.brightRed;
-    this.ansiColors[10] = theme.brightGreen;
-    this.ansiColors[11] = theme.brightYellow;
-    this.ansiColors[12] = theme.brightBlue;
-    this.ansiColors[13] = theme.brightMagenta;
-    this.ansiColors[14] = theme.brightCyan;
-    this.ansiColors[15] = theme.brightWhite;
+  setTheme(theme: TerminalTheme, viewportElement?: HTMLElement): void {
+    // Palette mapping: JS index → theme key → CSS variable name
+    const palette: [string, string][] = [
+      [theme.black,         '--term-ansi-0'],
+      [theme.red,           '--term-ansi-1'],
+      [theme.green,         '--term-ansi-2'],
+      [theme.yellow,        '--term-ansi-3'],
+      [theme.blue,          '--term-ansi-4'],
+      [theme.magenta,       '--term-ansi-5'],
+      [theme.cyan,          '--term-ansi-6'],
+      [theme.white,         '--term-ansi-7'],
+      [theme.brightBlack,   '--term-ansi-8'],
+      [theme.brightRed,     '--term-ansi-9'],
+      [theme.brightGreen,   '--term-ansi-10'],
+      [theme.brightYellow,  '--term-ansi-11'],
+      [theme.brightBlue,    '--term-ansi-12'],
+      [theme.brightMagenta, '--term-ansi-13'],
+      [theme.brightCyan,    '--term-ansi-14'],
+      [theme.brightWhite,   '--term-ansi-15'],
+    ];
+
+    // Update JS palette (used as fallback and for indices 16-255 which are always hex)
+    for (let i = 0; i < palette.length; i++) {
+      this.ansiColors[i] = palette[i]![0];
+    }
+
+    // Update CSS variables on the viewport element so existing spans update instantly
+    // without clearing the style cache or re-rendering.
+    if (viewportElement) {
+      for (const [color, varName] of palette) {
+        viewportElement.style.setProperty(varName, color);
+      }
+      viewportElement.style.setProperty('--term-fg', theme.foreground);
+      viewportElement.style.setProperty('--term-bg', theme.background);
+      viewportElement.style.setProperty('--term-cursor', theme.cursor);
+      viewportElement.setAttribute('data-theme', theme.name.toLowerCase().replace(/\s+/g, '-'));
+      this.cssVarsActive = true;
+    }
+
     this.container.style.backgroundColor = theme.background;
     this.container.style.color = theme.foreground;
-    this.styleCache.clear();
+
+    // Only clear the style cache when there is no viewport element. When CSS variables
+    // are in use the cached inline styles already reference var(--term-ansi-N) so they
+    // remain valid after a variable value change — no re-render needed for palette colors.
+    if (!viewportElement) {
+      this.styleCache.clear();
+    }
   }
 
   ensureRows(rows: number): void {
@@ -106,6 +166,7 @@ export class DomRenderer {
   }
 
   updateRows(buffer: ScreenBuffer, dirtyRows: Set<number>): void {
+    this.lastBuffer = buffer;
     this.ensureRows(buffer.rows);
     for (const y of dirtyRows) {
       if (y >= this.rowElements.length) continue;
@@ -114,6 +175,7 @@ export class DomRenderer {
   }
 
   renderAll(buffer: ScreenBuffer): void {
+    this.lastBuffer = buffer;
     this.ensureRows(buffer.rows);
     for (let y = 0; y < buffer.rows; y++) {
       this.renderRow(this.rowElements[y]!, buffer, y);
@@ -145,7 +207,133 @@ export class DomRenderer {
     }
 
     html += this.makeSpan(runStyleId, runChars, buffer.stylePool);
+
+    // Apply search-highlight overlay if this row has active match ranges.
+    // Post-pass on the final HTML string — the style-coalescing above is untouched.
+    const rowHighlights = this.highlights.get(y);
+    if (rowHighlights && rowHighlights.length > 0) {
+      html = this.injectHighlightSpans(html, rowHighlights, buffer.cols);
+    }
+
     rowEl.innerHTML = html;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Highlight overlay — public API
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Replace the full highlight set. Rows that changed (gained, lost, or had
+   * their ranges modified) are immediately re-rendered from lastBuffer.
+   * Pass an empty array to remove all highlights.
+   */
+  setHighlights(ranges: HighlightRange[]): void {
+    const prevRows = new Set(this.highlights.keys());
+
+    this.highlights.clear();
+    for (const r of ranges) {
+      let list = this.highlights.get(r.line);
+      if (!list) {
+        list = [];
+        this.highlights.set(r.line, list);
+      }
+      list.push(r);
+    }
+    // Sort each row's ranges by startCol ascending.
+    for (const list of this.highlights.values()) {
+      list.sort((a: HighlightRange, b: HighlightRange) => a.startCol - b.startCol);
+    }
+
+    // Re-render all rows that are or were highlighted.
+    const affectedRows = new Set([...prevRows, ...this.highlights.keys()]);
+    if (affectedRows.size === 0 || !this.lastBuffer) return;
+
+    const buf = this.lastBuffer;
+    this.ensureRows(buf.rows);
+    for (const y of affectedRows) {
+      if (y < 0 || y >= this.rowElements.length) continue;
+      this.renderRow(this.rowElements[y]!, buf, y);
+    }
+  }
+
+  /** Remove all highlights and re-render affected rows. */
+  clearHighlights(): void {
+    this.setHighlights([]);
+  }
+
+  /**
+   * Inject <span class="search-match"> / <span class="search-match-active">
+   * wrappers into a row's HTML string at the character column boundaries given
+   * by `ranges`. We walk the HTML character-by-character tracking tag vs. text
+   * context. Text characters increment a logical column counter; column ranges
+   * map directly to that counter. HTML entities (&amp; etc.) count as 1 column.
+   */
+  private injectHighlightSpans(
+    html: string,
+    ranges: HighlightRange[],
+    cols: number,
+  ): string {
+    // Build a flat per-column array of CSS class names (null = unhighlighted).
+    const colClass = new Array<string | null>(cols).fill(null);
+    for (const r of ranges) {
+      const cls = r.active ? 'search-match-active' : 'search-match';
+      for (let c = r.startCol; c < r.endCol && c < cols; c++) {
+        colClass[c] = cls;
+      }
+    }
+
+    let result = '';
+    let inTag = false;
+    let col = 0;
+    let currentHighlightCls: string | null = null;
+    let inEntity = false;
+
+    for (let i = 0; i < html.length; i++) {
+      const ch = html[i]!;
+
+      if (inTag) {
+        result += ch;
+        if (ch === '>') inTag = false;
+        continue;
+      }
+
+      if (ch === '<') {
+        // Leaving text — close any open highlight span before the tag.
+        if (currentHighlightCls !== null) {
+          result += '</span>';
+          currentHighlightCls = null;
+        }
+        inTag = true;
+        result += ch;
+        continue;
+      }
+
+      // Text character (possibly inside an HTML entity).
+      if (ch === '&') inEntity = true;
+
+      const wantedCls = col < cols ? (colClass[col] ?? null) : null;
+
+      if (wantedCls !== currentHighlightCls) {
+        if (currentHighlightCls !== null) result += '</span>';
+        if (wantedCls !== null) result += `<span class="${wantedCls}">`;
+        currentHighlightCls = wantedCls;
+      }
+
+      result += ch;
+
+      // Advance column: HTML entities count as 1 col (only on the ';').
+      if (inEntity) {
+        if (ch === ';') { inEntity = false; col++; }
+        // Don't increment col for intermediate entity chars.
+      } else {
+        col++;
+      }
+    }
+
+    // Close any trailing open highlight span.
+    if (currentHighlightCls !== null) result += '</span>';
+
+    return result;
   }
 
   private makeSpan(styleId: number, text: string, stylePool: import('./ScreenBuffer.js').StylePool): string {
@@ -201,6 +389,13 @@ export class DomRenderer {
       case ColorMode.DEFAULT:
         return null;
       case ColorMode.PALETTE:
+        // Palette indices 0-15 are theme colors. When CSS variables are active, reference
+        // var(--term-ansi-N) so that a theme switch (which updates the variable on the
+        // viewport element) instantly recolors all existing spans without re-rendering.
+        // Indices 16-255 are static (256-color cube + grayscale) — always inline hex.
+        if (this.cssVarsActive && value >= 0 && value <= 15) {
+          return `var(--term-ansi-${value})`;
+        }
         return this.ansiColors[value] ?? null;
       case ColorMode.RGB: {
         const r = (value >> 16) & 0xff;
@@ -220,6 +415,8 @@ export class DomRenderer {
   }
 
   dispose(): void {
+    this.highlights.clear();
+    this.lastBuffer = null;
     for (const row of this.rowElements) {
       row.remove();
     }

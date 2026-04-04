@@ -213,15 +213,23 @@ export class ScreenBuffer {
   /**
    * Read the visible viewport from an xterm.js buffer into this ScreenBuffer.
    * Uses a reusable IBufferCell to avoid per-cell allocations.
+   *
+   * @param buffer    xterm.js active buffer
+   * @param cols      terminal column count
+   * @param rows      terminal row count (lines to read)
+   * @param startLine Optional override for the first buffer line to read.
+   *                  When omitted, uses `buffer.viewportY` (xterm's native scroll position).
+   *                  Pass this from VirtualScroller.getViewportRange().startLine to render
+   *                  any slice of the scrollback buffer without modifying xterm's scroll state.
    */
-  readFromXTermBuffer(buffer: IBuffer, cols: number, rows: number): void {
+  readFromXTermBuffer(buffer: IBuffer, cols: number, rows: number, startLine?: number): void {
     // Resize if needed
     if (this.cols !== cols || this.rows !== rows) {
       this.resize(cols, rows);
     }
 
     const reusableCell = buffer.getNullCell();
-    const viewportY = buffer.viewportY;
+    const viewportY = startLine !== undefined ? startLine : buffer.viewportY;
 
     for (let y = 0; y < rows; y++) {
       const line: IBufferLine | undefined = buffer.getLine(viewportY + y);
