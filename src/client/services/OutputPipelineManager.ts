@@ -3,9 +3,9 @@ import { ANSI_STRIP_REGEX } from '@shared/terminalFilters';
 
 /**
  * Client-side thinking line detector — filters dots but NOT braille spinners.
- * The shared isThinkingLine() filters braille too, which kills Claude Code's
- * Ink spinner animation. This version allows braille through so the DOM
- * renderer can animate ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ spinners via \r overwrites.
+ * The shared isThinkingLine() filters braille too (^[\u2800-\u28FF]), which
+ * kills Claude Code's Ink spinner animation. This version intentionally skips
+ * braille so the DOM renderer can animate ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ via \r overwrites.
  */
 function isDotArtifact(stripped: string): boolean {
   if (stripped.length === 0) return false;
@@ -20,9 +20,10 @@ function isDotArtifact(stripped: string): boolean {
   const totalNonWhitespace = stripped.replace(/\s/g, '').length;
   if (totalNonWhitespace > 0 && dotCount / totalNonWhitespace >= 0.8 && dotCount >= 3) return true;
   return false;
-  // NOTE: braille lines (^[\u2800-\u28FF]) are intentionally NOT filtered here.
-  // The shared isThinkingLine() filters them — we skip that for the DOM renderer.
 }
+
+/** Matches cursor positioning sequences (CSI H/f) used as line delimiters by Ink. */
+const CURSOR_POSITION_REGEX = /^\x1b\[\d*(?:;\d*)?[Hf]$/;
 
 export interface OutputPipelineConfig {
   flushIntervalMs?: number;
@@ -68,9 +69,8 @@ interface WindowOutputState {
   throttleMode: 'normal' | 'light' | 'heavy' | 'critical';
   // Post-resize suppression: timestamp when resize-pending was last cleared
   postResizeSuppressUntil: number;
-  // Ink redraw coalescing: detect rapid erase+home sequences
+  // Ink redraw coalescing: detect erase+home sequences
   lastEraseHomeTime: number;
-  eraseHomeCount: number;
 }
 
 export type FlushCallback = (windowId: string, data: string) => void;
@@ -79,6 +79,81 @@ export type BackpressureCallback = (windowId: string, throttle: boolean) => void
 
 // Re-export shared filters (server-side still uses full filters via TmuxManager)
 export { filterThinkingOutput, filterCarriageReturnThinking, filterAllThinkingOutput } from '@shared/terminalFilters';
+
+/**
+ * Client-side thinking filter that preserves braille spinner animation.
+ * Use this instead of filterAllThinkingOutput() on paths that may contain
+ * active Claude Code UI (restore, replay, pending restore).
+ * Filters dot artifacts but keeps ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ spinners intact.
+ *
+ * Splits on newlines AND cursor positioning sequences — Ink renders multiline
+ * output via cursor moves (e.g. \x1b[2;1H), not newlines. Without this split,
+ * dot lines between cursor positions slip through as part of a larger chunk.
+ */
+export function filterOutputPreservingSpinners(data: string): string {
+  if (!data) return data;
+
+  // Stage 1: Filter \r-delimited dot sequences (preserves braille via isDotArtifact)
+  let filtered = data;
+  if (filtered.includes('\r')) {
+    const lines = filtered.split(/(\r\n|\n)/);
+    const crResult: string[] = [];
+    for (const line of lines) {
+      if (line === '\r\n' || line === '\n') { crResult.push(line); continue; }
+      if (line === '\r') { crResult.push(line); continue; }
+      const segments = line.split('\r');
+      if (segments.length <= 1) { crResult.push(line); continue; }
+      let kept: string | null = null;
+      let needsCR = false;
+      for (let i = segments.length - 1; i >= 0; i--) {
+        const seg = segments[i];
+        const stripped = seg.replace(ANSI_STRIP_REGEX, '').trim();
+        if (stripped.length > 0 && isDotArtifact(stripped)) continue;
+        if (seg.length === 0) continue;
+        kept = seg;
+        needsCR = i > 0;
+        break;
+      }
+      if (kept !== null) {
+        crResult.push(needsCR ? '\r' + kept : kept);
+      }
+    }
+    filtered = crResult.join('');
+  }
+
+  // Stage 2: Split on newlines AND cursor positioning (Ink uses CSI H/f between rows)
+  const parts = filtered.split(/(\r\n|\r|\n|\x1b\[\d*(?:;\d*)?[Hf])/);
+  const result: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part === '\r\n' || part === '\r' || part === '\n') {
+      result.push(part);
+      continue;
+    }
+    if (CURSOR_POSITION_REGEX.test(part)) {
+      result.push(part);
+      continue;
+    }
+    const stripped = part.replace(ANSI_STRIP_REGEX, '').trim();
+    if (stripped.length === 0) { result.push(part); continue; }
+    if (isDotArtifact(stripped)) {
+      // Preserve DEC 2026 sync brackets to prevent dangling sync state
+      const hasSyncBegin = part.includes('\x1b[?2026h');
+      const hasSyncEnd = part.includes('\x1b[?2026l');
+      const syncPrefix = hasSyncBegin ? '\x1b[?2026h' : '';
+      const syncSuffix = hasSyncEnd ? '\x1b[?2026l' : '';
+      // After cursor positioning, erase the line to clean up visual artifacts
+      if (i > 0 && CURSOR_POSITION_REGEX.test(parts[i - 1])) {
+        result.push(syncPrefix + '\x1b[K' + syncSuffix);
+      } else if (syncPrefix || syncSuffix) {
+        result.push(syncPrefix + syncSuffix);
+      }
+      continue;
+    }
+    result.push(part);
+  }
+  return result.join('');
+}
 
 export class OutputPipelineManager {
   private windows: Map<string, WindowOutputState> = new Map();
@@ -150,7 +225,6 @@ export class OutputPipelineManager {
         throttleMode: 'normal',
         postResizeSuppressUntil: 0,
         lastEraseHomeTime: 0,
-        eraseHomeCount: 0,
       };
       this.windows.set(windowId, state);
     }
@@ -257,71 +331,19 @@ export class OutputPipelineManager {
     }
   }
 
-  /**
-   * Client-side output filter for DOM renderer v2.
-   *
-   * Two-stage filter like the shared version, but uses isDotArtifact() instead
-   * of isThinkingLine() — this preserves braille spinner animation (⠋⠙⠹...)
-   * while still filtering dot artifacts from tmux SIGWINCH and Claude thinking dots.
-   *
-   * Stage 1: \r-delimited segment filter (dot sequences overwriting via carriage return)
-   * Stage 2: Line-based filter (remaining dot-only lines)
-   */
+  /** Delegates to the exported filterOutputPreservingSpinners — single implementation. */
   private filterThinkingOutput(data: string): string {
-    // Stage 1: Filter \r-delimited thinking dots (.\r..\r...\r...)
-    // Keeps braille spinners (⠋ Thinking...\r⠙ Thinking...) since isDotArtifact skips braille
-    let filtered = data;
-    if (filtered.includes('\r')) {
-      const lines = filtered.split(/(\r\n|\n)/);
-      const crResult: string[] = [];
-      for (const line of lines) {
-        if (line === '\r\n' || line === '\n') { crResult.push(line); continue; }
-        if (line === '\r') { crResult.push(line); continue; }
-        const segments = line.split('\r');
-        if (segments.length <= 1) { crResult.push(line); continue; }
-        // Walk segments from last to first, keep first non-dot segment
-        let kept: string | null = null;
-        let needsCR = false;
-        for (let i = segments.length - 1; i >= 0; i--) {
-          const seg = segments[i];
-          const stripped = seg.replace(ANSI_STRIP_REGEX, '').trim();
-          if (stripped.length > 0 && isDotArtifact(stripped)) continue;
-          if (seg.length === 0) continue;
-          kept = seg;
-          needsCR = i > 0;
-          break;
-        }
-        if (kept !== null) {
-          crResult.push(needsCR ? '\r' + kept : kept);
-        }
-      }
-      filtered = crResult.join('');
-    }
-
-    // Stage 2: Line-based dot artifact filter
-    const parts = filtered.split(/(\r\n|\r|\n)/);
-    const result: string[] = [];
-    for (const part of parts) {
-      if (part === '\r\n' || part === '\r' || part === '\n') {
-        result.push(part);
-        continue;
-      }
-      const stripped = part.replace(ANSI_STRIP_REGEX, '').trim();
-      if (stripped.length > 0 && isDotArtifact(stripped)) continue;
-      result.push(part);
-    }
-    return result.join('');
+    return filterOutputPreservingSpinners(data);
   }
 
   /**
    * Detect Ink (React for CLI) full-screen redraws.
-   * Ink issues CSI erase (\x1b[2J or \x1b[J) followed by cursor home (\x1b[H).
-   * Each redraw rewrites the entire visible buffer — only the last frame matters.
+   * Requires \x1b[2J (erase entire display) — this distinguishes Ink from
+   * standard TUI programs (vim, less, htop) that use cursor-hide + cursor-home
+   * without full erase. Those programs must NOT trigger buffer replacement.
    */
   private detectInkRedraw(data: string): boolean {
-    // Only match full screen erase (\x1b[2J) + cursor home (\x1b[H).
-    // Excludes \x1b[J (erase below) — used by non-Ink programs (vim, ncurses).
-    return /\x1b\[2J[\s\S]*?\x1b\[H/.test(data);
+    return /\x1b\[2J/.test(data);
   }
 
   enqueue(windowId: string, data: string, seq?: number): void {
@@ -351,32 +373,6 @@ export class OutputPipelineManager {
       filtered = this.filterThinkingOutput(filtered);
     }
 
-    // Ink redraw coalescing: when Claude Code's Ink framework issues rapid
-    // full-screen redraws (erase+home), replace buffer instead of appending.
-    // Each redraw supersedes the previous — only the last frame matters.
-    if (this.detectInkRedraw(filtered)) {
-      const now = performance.now();
-      if (now - state.lastEraseHomeTime < 50) {
-        // Rapid redraw within 50ms — replace buffer contents
-        state.buffer = filtered;
-        state.eraseHomeCount++;
-        state.lastEraseHomeTime = now;
-        // Escalate throttle if too many redraws per window
-        if (state.eraseHomeCount > 3 && state.throttleMode === 'normal') {
-          state.throttleMode = 'light';
-        }
-        // Track bytes for throttle calculation
-        state.bytesInWindow += filtered.length;
-        this.scheduleFlush(windowId);
-        return;
-      }
-      state.lastEraseHomeTime = now;
-      state.eraseHomeCount = 1;
-    } else {
-      // Reset redraw count on non-redraw data
-      state.eraseHomeCount = 0;
-    }
-
     if (state.resizePending) {
       state.pendingResizeBuffer += filtered;
       // Enforce buffer limit for pending resize buffer too
@@ -388,7 +384,28 @@ export class OutputPipelineManager {
       return;
     }
 
-    state.buffer += filtered;
+    // Ink redraw coalescing: each Ink full-screen redraw (\x1b[2J) clears+redraws
+    // everything. Only the latest frame matters — replace buffer to prevent stale
+    // frames from coalescing and killing spinner animation.
+    // Placed AFTER resizePending guard so we don't replace main buffer during resize.
+    if (this.detectInkRedraw(filtered)) {
+      state.buffer = filtered;
+      state.lastEraseHomeTime = performance.now();
+      state.bytesInWindow += filtered.length;
+      this.scheduleFlush(windowId);
+      return;
+    }
+
+    // Carriage return overwrite: \r (not \r\n) moves cursor to column 0 and
+    // the following content overwrites the current line. If the buffer already
+    // has content on its last line, that content is superseded — replace the
+    // tail instead of appending to prevent stale spinner frames from accumulating.
+    if (filtered.length > 0 && filtered[0] === '\r' && filtered[1] !== '\n' && state.buffer.length > 0) {
+      const lastNL = state.buffer.lastIndexOf('\n');
+      state.buffer = (lastNL >= 0 ? state.buffer.slice(0, lastNL + 1) : '') + filtered;
+    } else {
+      state.buffer += filtered;
+    }
 
     // Enforce buffer size limit — keep newest data by trimming from the start.
     // Advance trim point past any split ANSI escape or UTF-16 surrogate pair.

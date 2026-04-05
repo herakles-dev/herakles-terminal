@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutputPipelineManager } from '../OutputPipelineManager';
+import { OutputPipelineManager, filterOutputPreservingSpinners } from '../OutputPipelineManager';
 
 describe('OutputPipelineManager', () => {
   beforeEach(() => {
@@ -408,65 +408,152 @@ describe('OutputPipelineManager', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Seed
-      pipeline.enqueue('window-1', 'seed');
-      vi.advanceTimersByTime(1100);
-      onFlush.mockClear();
-
       // Ink redraw: \x1b[2J (erase display) + \x1b[H (cursor home)
       const inkRedraw = '\x1b[2J\x1b[Hsome content here';
       pipeline.enqueue('window-1', inkRedraw);
 
-      vi.advanceTimersByTime(24);
-
+      // First data on fresh window may trigger light throttle (24ms)
+      vi.advanceTimersByTime(25);
       expect(onFlush).toHaveBeenCalledTimes(1);
     });
 
-    it('replaces buffer during rapid Ink redraws', () => {
+    it('does NOT treat cursor-hide+home (without full clear) as Ink redraw', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // All three redraws arrive before the flush timer fires (within same tick).
-      // The Ink coalescing detects rapid erase+home and replaces the buffer.
-      const redraw1 = '\x1b[2J\x1b[HFrame 1';
-      pipeline.enqueue('window-1', redraw1);
+      // vim/less/htop use ?25l + cursor home without \x1b[2J — must NOT replace buffer
+      pipeline.enqueue('window-1', 'prior output');
+      const tuiFrame = '\x1b[?25l\x1b[H statusline content \x1b[?25h';
+      pipeline.enqueue('window-1', tuiFrame);
 
-      // Simulate rapid redraws within <50ms (no timer advance between enqueues)
-      const redraw2 = '\x1b[2J\x1b[HFrame 2';
-      pipeline.enqueue('window-1', redraw2);
+      vi.advanceTimersByTime(25);
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      // Prior output must be preserved (not replaced)
+      expect(flushed).toContain('prior output');
+      expect(flushed).toContain('statusline content');
+    });
 
-      const redraw3 = '\x1b[2J\x1b[HFrame 3';
-      pipeline.enqueue('window-1', redraw3);
+    it('always replaces buffer for Ink redraws (prevents stale frame coalescing)', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
 
-      // Flush — should only see the LAST frame (Frame 3)
+      // Three Ink redraws arrive before flush fires — each replaces the previous
+      pipeline.enqueue('window-1', '\x1b[2J\x1b[HFrame 1');
+      pipeline.enqueue('window-1', '\x1b[2J\x1b[HFrame 2');
+      pipeline.enqueue('window-1', '\x1b[2J\x1b[HFrame 3');
+
       flushTimers();
 
       const flushedData = onFlush.mock.calls.map(c => c[1]).join('');
       expect(flushedData).toContain('Frame 3');
       expect(flushedData).not.toContain('Frame 1');
+      expect(flushedData).not.toContain('Frame 2');
     });
 
-    it('does not coalesce redraws >50ms apart', () => {
+    it('replaces buffer even for redraws >50ms apart', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // First Ink redraw
-      const redraw1 = '\x1b[2J\x1b[HFrame 1';
-      pipeline.enqueue('window-1', redraw1);
+      // First redraw — unflushed (simulating throttle delay)
+      pipeline.enqueue('window-1', '\x1b[2J\x1b[HFrame 1');
 
-      // Flush first frame
-      flushTimers();
-      expect(onFlush).toHaveBeenCalledTimes(1);
+      // Advance time but DON'T flush (simulating heavy throttle pending)
+      // Enqueue second redraw — should REPLACE, not append
+      vi.advanceTimersByTime(80);
+
+      // Manually clear the flush that fired at 1ms and enqueue again
       onFlush.mockClear();
-
-      // Second redraw >50ms later — should NOT replace
-      vi.advanceTimersByTime(100);
-      const redraw2 = '\x1b[2J\x1b[HFrame 2';
-      pipeline.enqueue('window-1', redraw2);
+      pipeline.enqueue('window-1', '\x1b[2J\x1b[HFrame 2');
 
       flushTimers();
-      expect(onFlush).toHaveBeenCalledTimes(1);
-      expect(onFlush).toHaveBeenCalledWith('window-1', redraw2);
+      const flushedData = onFlush.mock.calls.map(c => c[1]).join('');
+      expect(flushedData).toContain('Frame 2');
+      expect(flushedData).not.toContain('Frame 1');
+    });
+  });
+
+  describe('carriage return overwrite', () => {
+    it('replaces buffer tail when data starts with \\r', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // First frame (no \r — initial spinner line)
+      pipeline.enqueue('window-1', '\u2819 Thinking...');
+
+      // Second frame starts with \r — overwrites the current line
+      pipeline.enqueue('window-1', '\r\u2839 Thinking...');
+
+      flushTimers();
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      // Should contain only the latest frame (second overwrites first)
+      expect(flushed).toContain('\u2839 Thinking...');
+      expect(flushed).not.toContain('\u2819');
+    });
+
+    it('preserves newline-terminated output before \\r overwrite', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // First: some normal output with newline
+      pipeline.enqueue('window-1', 'Build complete\n\u2819 Thinking...');
+
+      // Second: \r overwrite updates spinner on last line
+      pipeline.enqueue('window-1', '\r\u2839 Thinking...');
+
+      vi.advanceTimersByTime(25);
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      expect(flushed).toContain('Build complete\n');
+      expect(flushed).toContain('\u2839 Thinking...');
+      expect(flushed).not.toContain('\u2819');
+    });
+
+    it('does not replace for \\r\\n (newline, not overwrite)', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      pipeline.enqueue('window-1', 'line 1');
+      pipeline.enqueue('window-1', '\r\nline 2');
+
+      flushTimers();
+      expect(onFlush).toHaveBeenCalledWith('window-1', 'line 1\r\nline 2');
+    });
+  });
+
+  describe('filterOutputPreservingSpinners', () => {
+    it('preserves braille spinner characters', () => {
+      const input = '\u2819 Thinking...';
+      expect(filterOutputPreservingSpinners(input)).toBe(input);
+    });
+
+    it('preserves braille with ANSI codes', () => {
+      const input = '\x1b[36m\u2819 Thinking...\x1b[0m';
+      expect(filterOutputPreservingSpinners(input)).toBe(input);
+    });
+
+    it('filters pure dot lines', () => {
+      const result = filterOutputPreservingSpinners('...\n....\nreal output');
+      expect(result).not.toContain('...');
+      expect(result).toContain('real output');
+    });
+
+    it('filters dot artifacts but keeps braille in mixed content', () => {
+      const input = '....\n\u2819 Thinking...\nmore dots: ....';
+      const result = filterOutputPreservingSpinners(input);
+      expect(result).toContain('\u2819 Thinking...');
+    });
+
+    it('filters dots positioned via cursor sequences (Ink multiline)', () => {
+      // Ink renders: cursor-home + spinner line + cursor-position + dot line
+      const input = '\x1b[H\u2819 Thinking...\x1b[2;1H....\x1b[3;1Hreal content';
+      const result = filterOutputPreservingSpinners(input);
+      expect(result).toContain('\u2819 Thinking...');
+      expect(result).toContain('real content');
+      // Dots between cursor positions should be filtered (replaced with erase-to-EOL)
+      expect(result).not.toMatch(/\.\.\.\./);
+    });
+
+    it('handles empty input', () => {
+      expect(filterOutputPreservingSpinners('')).toBe('');
     });
   });
 

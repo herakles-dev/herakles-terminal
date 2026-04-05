@@ -318,6 +318,14 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           scheduleRender();
         });
 
+        // onWriteParsed fires from setTimeout (after xterm parses data into its buffer),
+        // NOT from RAF. On mobile browsers, RAF is throttled during no-interaction periods,
+        // which prevents onRender from firing — but onWriteParsed always fires.
+        // This ensures spinner animation renders even when the user isn't touching the screen.
+        const writeParsedDisposable = term.onWriteParsed(() => {
+          scheduleRender();
+        });
+
         const cursorDisposable = term.onCursorMove(() => {
           const buf = term.buffer.active;
           if (!virtualScrollerRef.current || virtualScrollerRef.current.isAtBottom()) {
@@ -397,6 +405,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             resizeDebounceRef.current = null;
           }
           renderDisposable.dispose();
+          writeParsedDisposable.dispose();
           cursorDisposable.dispose();
           dataDisposable.dispose();
           scrollDisposable.dispose();

@@ -51,7 +51,7 @@ import { RizStopPanel, StopProtocolOverlay } from './components/StopProtocol';
 import { STOP_PROTOCOL_USER } from '@shared/stopProtocol';
 import { useToast } from './components/Toast/Toast';
 import { uploadService } from './services/uploadService';
-import { OutputPipelineManager, filterAllThinkingOutput } from './services/OutputPipelineManager';
+import { OutputPipelineManager, filterOutputPreservingSpinners } from './services/OutputPipelineManager';
 import { WebGLHealthMonitor, exposeMetricsToWindow } from './services/WebGLHealthMonitor';
 
 import { ResizeCoordinatorContext } from './contexts/ResizeCoordinatorContext';
@@ -595,7 +595,7 @@ export default function App() {
 
         if (terminal && msg.data) {
           // Step 2: Filter thinking output before restore write (defense-in-depth)
-          const filteredData = filterAllThinkingOutput(msg.data);
+          const filteredData = filterOutputPreservingSpinners(msg.data);
           // Single RAF (reduced from 3 nested RAFs)
           requestAnimationFrame(() => {
             // FIX A: Use ANSI clear screen + cursor home instead of terminal.reset()
@@ -711,7 +711,7 @@ export default function App() {
         // Filter thinking output before writing (defense-in-depth)
         if (msg.data) {
           const handle = terminalRefs.current.get(msg.windowId);
-          handle?.terminal?.write(filterAllThinkingOutput(msg.data));
+          handle?.terminal?.write(filterOutputPreservingSpinners(msg.data));
         }
         break;
       }
@@ -1413,7 +1413,7 @@ export default function App() {
         const pendingRestore = pendingRestoreRef.current.get(windowId);
         if (pendingRestore && handle.terminal) {
           pendingRestoreRef.current.delete(windowId);
-          const filteredPending = filterAllThinkingOutput(pendingRestore);
+          const filteredPending = filterOutputPreservingSpinners(pendingRestore);
           requestAnimationFrame(() => {
             // FIX A: Use ANSI clear instead of reset() to preserve scrollback
             handle.terminal?.write('\x1b[2J\x1b[H' + filteredPending, () => {
