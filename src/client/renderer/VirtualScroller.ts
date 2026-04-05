@@ -91,6 +91,11 @@ export class VirtualScroller {
 
   // Total lines in xterm buffer (updated on each render)
   private totalLines = 0;
+  // Tracks totalLines as of the last onNewOutput() call. Separate from
+  // this.totalLines which can be mutated by getViewportRange() — using
+  // this.totalLines directly caused missed deltas when getViewportRange()
+  // ran between successive onNewOutput() calls (zeroing the delta).
+  private prevTotalLinesAtOutput = 0;
   // xterm handle (set after open())
   private term: XTerm | null = null;
 
@@ -160,6 +165,7 @@ export class VirtualScroller {
     this.term = term;
     this.viewportRows = term.rows;
     this.updateTotalLines();
+    this.prevTotalLinesAtOutput = this.totalLines;
   }
 
   /**
@@ -168,6 +174,7 @@ export class VirtualScroller {
   setViewportRows(rows: number): void {
     this.viewportRows = rows;
     this.updateTotalLines();
+    this.prevTotalLinesAtOutput = this.totalLines;
     // After resize, clamp scroll offset and update scrollbar
     this.clampOffset();
     this.updateScrollbar();
@@ -240,8 +247,9 @@ export class VirtualScroller {
    * to pass newLinesAdded (the parameter was always 0, breaking scroll-up tracking).
    */
   onNewOutput(): void {
-    const prevTotal = this.totalLines;
+    const prevTotal = this.prevTotalLinesAtOutput;
     this.updateTotalLines();
+    this.prevTotalLinesAtOutput = this.totalLines;
     const delta = this.totalLines - prevTotal;
 
     if (this._isAtBottom) {

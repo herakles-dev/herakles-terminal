@@ -143,6 +143,10 @@ export class DomRenderer {
 
     this.container.style.backgroundColor = theme.background;
     this.container.style.color = theme.foreground;
+    // Also set --term-bg on the rows container so CSS var(--term-bg) resolves
+    // correctly even if the viewport's CSS variable doesn't inherit through
+    // the absolute-positioned containment boundary.
+    this.container.style.setProperty('--term-bg', theme.background);
 
     // Only clear the style cache when there is no viewport element. When CSS variables
     // are in use the cached inline styles already reference var(--term-ansi-N) so they

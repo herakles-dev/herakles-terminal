@@ -27,8 +27,12 @@ function getMeasureContainer(): HTMLElement {
     // lineHeight matches actual rendered row height. Without -webkit-font-smoothing
     // and text-rendering, the measurement span can report a lineHeight that differs
     // by 1-2px from the actual row, causing aspect-ratio-dependent row gaps.
+    // contain:strict includes size containment which can cause offsetWidth
+    // sub-pixel rounding differences at fractional DPR. Use layout+style only
+    // to match the viewport's containment model (contain: layout paint on viewport,
+    // but we skip paint here since the element is off-screen).
     measureContainer.style.cssText =
-      'position:fixed;visibility:hidden;top:-9999px;left:-9999px;pointer-events:none;contain:strict;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeSpeed';
+      'position:fixed;visibility:hidden;top:-9999px;left:-9999px;pointer-events:none;contain:layout style;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeSpeed';
     document.body.appendChild(measureContainer);
   }
   return measureContainer;
@@ -72,7 +76,32 @@ export function measureCharDimensions(
 }
 
 /**
+ * Calculate terminal dimensions from explicit width/height values.
+ * Accepts pre-measured dimensions (e.g. from ResizeObserver contentBoxSize)
+ * to avoid reading getBoundingClientRect() which can return stale values
+ * during deep flex layout resolution.
+ */
+export function calculateTerminalDimensionsFromSize(
+  width: number,
+  height: number,
+  fontFamily: string,
+  fontSize: number,
+  padding = 4,
+): { cols: number; rows: number } {
+  const { charWidth, lineHeight } = measureCharDimensions(fontFamily, fontSize);
+
+  const availableWidth = width - padding * 2;
+  const availableHeight = height - padding * 2;
+
+  const cols = Math.max(2, Math.floor(availableWidth / charWidth));
+  const rows = Math.max(1, Math.floor(availableHeight / lineHeight));
+
+  return { cols, rows };
+}
+
+/**
  * Calculate terminal dimensions (cols, rows) from a container element.
+ * Convenience wrapper — reads getBoundingClientRect() and delegates.
  */
 export function calculateTerminalDimensions(
   container: HTMLElement,
@@ -80,16 +109,8 @@ export function calculateTerminalDimensions(
   fontSize: number,
   padding = 4,
 ): { cols: number; rows: number } {
-  const { charWidth, lineHeight } = measureCharDimensions(fontFamily, fontSize);
   const rect = container.getBoundingClientRect();
-
-  const availableWidth = rect.width - padding * 2;
-  const availableHeight = rect.height - padding * 2;
-
-  const cols = Math.max(2, Math.floor(availableWidth / charWidth));
-  const rows = Math.max(1, Math.floor(availableHeight / lineHeight));
-
-  return { cols, rows };
+  return calculateTerminalDimensionsFromSize(rect.width, rect.height, fontFamily, fontSize, padding);
 }
 
 /**

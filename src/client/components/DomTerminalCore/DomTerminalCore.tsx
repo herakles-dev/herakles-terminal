@@ -27,6 +27,7 @@ import { VirtualScroller } from '../../renderer/VirtualScroller.js';
 import {
   measureCharDimensions,
   calculateTerminalDimensions,
+  calculateTerminalDimensionsFromSize,
   invalidateFontCache,
 } from '../../renderer/measureFont.js';
 import type { TerminalCoreProps, TerminalCoreHandle } from '../TerminalCore/TerminalCore';
@@ -100,16 +101,44 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
       // Wait for fonts to load before measuring
       const init = async () => {
         await document.fonts.ready;
-        // Wait one frame after font load for the browser to commit layout.
-        // Without this, getBoundingClientRect() on the outer div can return
-        // stale dimensions from the pre-font layout, producing wrong row counts
-        // that persist until a resize event (which may never come on desktop).
-        await new Promise<void>(r => requestAnimationFrame(() => r()));
+        if (cancelled) return;
+
+        // Wait for the first ResizeObserver callback to get authoritative
+        // post-layout dimensions. A single RAF was insufficient for the deep
+        // flex chain (SplitView % → flex → flex → flex → outer) — the outer div
+        // could still report stale height, producing wrong row counts that
+        // persisted until a subsequent resize (which may never come on desktop).
+        // ResizeObserver fires its initial notification once the element has
+        // non-zero dimensions, guaranteeing the flex layout has settled.
+        const initialSize = await new Promise<{ width: number; height: number }>((resolve) => {
+          let resolved = false;
+          const initObserver = new ResizeObserver((entries) => {
+            if (resolved) return;
+            const entry = entries[0];
+            if (!entry) return;
+            let width: number, height: number;
+            if (entry.contentBoxSize && entry.contentBoxSize[0]) {
+              width = entry.contentBoxSize[0].inlineSize;
+              height = entry.contentBoxSize[0].blockSize;
+            } else {
+              width = entry.contentRect.width;
+              height = entry.contentRect.height;
+            }
+            if (width > 0 && height > 0) {
+              resolved = true;
+              initObserver.disconnect();
+              resolve({ width, height });
+            }
+          });
+          initObserver.observe(outer);
+        });
         if (cancelled) return;
 
         invalidateFontCache();
         const { charWidth, lineHeight } = measureCharDimensions(fontFamily, fontSize);
-        const { cols, rows } = calculateTerminalDimensions(outer, fontFamily, fontSize, PADDING);
+        const { cols, rows } = calculateTerminalDimensionsFromSize(
+          initialSize.width, initialSize.height, fontFamily, fontSize, PADDING
+        );
 
         // --- DOM structure ---
         const hiddenContainer = document.createElement('div');
@@ -377,11 +406,26 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // term.resize() + onResize(), spamming the server with mid-drag resizes
         // and causing repeated output-buffer holds. The debounce matches RC-1's
         // 80ms drain delay so the final settled size is what gets sent.
+        // Use contentBoxSize from ResizeObserver entries when available —
+        // these are authoritative post-layout dimensions that avoid the
+        // stale-getBoundingClientRect problem during deep flex resolution.
+        let latestROEntry: ResizeObserverEntry | undefined;
+
         const applyResize = () => {
           const t = termRef.current;
           if (!t || !outer) return;
 
-          const dims = calculateTerminalDimensions(outer, fontFamily, fontSize, PADDING);
+          let dims;
+          const entry = latestROEntry;
+          if (entry?.contentBoxSize?.[0]) {
+            const { inlineSize, blockSize } = entry.contentBoxSize[0];
+            dims = calculateTerminalDimensionsFromSize(
+              inlineSize, blockSize, fontFamily, fontSize, PADDING
+            );
+          } else {
+            dims = calculateTerminalDimensions(outer, fontFamily, fontSize, PADDING);
+          }
+
           if (dims.cols !== t.cols || dims.rows !== t.rows) {
             // Update VirtualScroller BEFORE t.resize() — resize fires onRender
             // synchronously, and onNewOutput() needs current viewportRows to
@@ -397,7 +441,8 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           }
         };
 
-        const resizeObserver = new ResizeObserver(() => {
+        const resizeObserver = new ResizeObserver((entries) => {
+          latestROEntry = entries[0];
           if (resizeDebounceRef.current !== null) {
             clearTimeout(resizeDebounceRef.current);
           }
@@ -409,10 +454,10 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         resizeObserver.observe(outer);
 
         // --- Initial render + onReady ---
-        requestAnimationFrame(() => {
-          performRender();
-          if (onReady) onReady(term, null as unknown as FitAddon);
-        });
+        // No RAF wrapper needed — the terminal was created with authoritative
+        // dimensions from ResizeObserver, so DOM is ready for immediate render.
+        performRender();
+        if (onReady) onReady(term, null as unknown as FitAddon);
 
         // --- Cleanup ---
         cleanupRef.current = () => {

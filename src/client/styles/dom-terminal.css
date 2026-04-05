@@ -13,6 +13,10 @@
   touch-action: none;
   /* Prevent scroll chaining to parent on overscroll */
   overscroll-behavior: contain;
+  /* Explicit terminal background — prevents --bg-secondary (#07070c) from the
+     terminal-container parent bleeding through when the outer div's theme
+     background (#000000) doesn't perfectly cover due to flex layout timing. */
+  background-color: var(--term-bg, #000000);
 }
 
 /* On touch-only devices (no hover), keep scrollbar faintly visible as a hint */
@@ -28,6 +32,9 @@
      so each touchable element must set it explicitly. Without this, the browser
      intercepts touch gestures on rows before VirtualScroller's touchmove handler fires. */
   touch-action: none;
+  /* Match viewport background so any sub-pixel gaps between rows container and
+     viewport edge show the correct terminal color, not the parent's --bg-secondary. */
+  background-color: var(--term-bg, #000000);
 }
 
 .dom-term-row {
