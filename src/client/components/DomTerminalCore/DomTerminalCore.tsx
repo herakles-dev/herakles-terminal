@@ -60,7 +60,9 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     const charPoolRef = useRef<CharPool>(new CharPool());
     const stylePoolRef = useRef<StylePool>(new StylePool());
     const rafIdRef = useRef<number | null>(null);
+    const renderWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const pendingRenderRef = useRef(false);
+    const cursorVisibleRef = useRef(true); // DECTCEM ?25h/l state
     const dirtyFullRef = useRef(true); // first render is always full
     const scheduleRenderRef = useRef<(() => void) | null>(null);
     const cleanupRef = useRef<(() => void) | null>(null);
@@ -244,9 +246,9 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
           backBuf.readFromXTermBuffer(t.buffer.active, t.cols, t.rows, startLine);
 
-          // Hide cursor when scrolled into scrollback history
+          // Hide cursor when scrolled into scrollback or when DECTCEM ?25l is active
           const atBottom = !s || s.isAtBottom();
-          cursor.setVisible(atBottom);
+          cursor.setVisible(atBottom && cursorVisibleRef.current);
 
           if (dirtyFullRef.current) {
             r.renderAll(backBuf);
@@ -271,8 +273,27 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             pendingRenderRef.current = true;
             rafIdRef.current = requestAnimationFrame(() => {
               pendingRenderRef.current = false;
+              if (renderWatchdogRef.current) {
+                clearTimeout(renderWatchdogRef.current);
+                renderWatchdogRef.current = null;
+              }
               performRender();
             });
+            // Watchdog: mobile browsers throttle RAF during low interaction periods.
+            // If RAF doesn't fire within 100ms, force-render via setTimeout to prevent
+            // visible freezing of spinner animation and output.
+            if (renderWatchdogRef.current) clearTimeout(renderWatchdogRef.current);
+            renderWatchdogRef.current = setTimeout(() => {
+              renderWatchdogRef.current = null;
+              if (pendingRenderRef.current) {
+                pendingRenderRef.current = false;
+                if (rafIdRef.current !== null) {
+                  cancelAnimationFrame(rafIdRef.current);
+                  rafIdRef.current = null;
+                }
+                performRender();
+              }
+            }, 100);
           }
         }
 
@@ -317,8 +338,12 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           scheduleFullRender();
         });
 
-        // Buffer switch (normal ↔ alternate screen) — always snap to bottom
+        // Buffer switch (normal ↔ alternate screen) — always snap to bottom.
+        // Reset cursor visibility: apps leaving ?25l active on alt screen exit
+        // shouldn't permanently hide the cursor on the normal screen.
         const bufferChangeDisposable = term.buffer.onBufferChange(() => {
+          cursorVisibleRef.current = true;
+          cursorRef.current?.setVisible(true);
           virtualScrollerRef.current?.scrollToBottom();
           scheduleFullRender();
         });
@@ -377,6 +402,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           scrollDisposable.dispose();
           bufferChangeDisposable.dispose();
           if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+          if (renderWatchdogRef.current) clearTimeout(renderWatchdogRef.current);
           virtualScrollerRef.current?.dispose();
           virtualScrollerRef.current = null;
           cursor.dispose();
@@ -452,6 +478,19 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           return null;
         },
         write: (data: string) => {
+          // Track DECTCEM cursor visibility (?25h = show, ?25l = hide).
+          // xterm.js parses these but doesn't expose visibility in IModes.
+          // Ink's render loop sends ?25l...draw...?25h in a single chunk,
+          // so we use lastIndexOf to find whichever appears last (final state wins).
+          const hideIdx = data.lastIndexOf('\x1b[?25l');
+          const showIdx = data.lastIndexOf('\x1b[?25h');
+          if (hideIdx > showIdx) {
+            cursorVisibleRef.current = false;
+            cursorRef.current?.setVisible(false);
+          } else if (showIdx > hideIdx) {
+            cursorVisibleRef.current = true;
+            cursorRef.current?.setVisible(true);
+          }
           // DEC 2026 synchronized output — prevents partial-frame reads
           termRef.current?.write('\x1b[?2026h' + data + '\x1b[?2026l');
         },
@@ -475,7 +514,9 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         focus: () => { if (!isMobileRef.current) termRef.current?.focus(); },
         clear: () => {
           termRef.current?.clear();
-          // Snap back to bottom after clear
+          // Reset cursor visibility — crashed Ink processes may leave ?25l active
+          cursorVisibleRef.current = true;
+          cursorRef.current?.setVisible(true);
           virtualScrollerRef.current?.scrollToBottom();
         },
         setTheme: (themeName: string) => {

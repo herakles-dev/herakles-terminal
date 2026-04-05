@@ -21,10 +21,16 @@ import type { IBuffer, IBufferCell, IBufferLine } from '@xterm/xterm';
 // ---------------------------------------------------------------------------
 
 export class CharPool {
-  private strings: string[] = [' ', '']; // 0 = space, 1 = empty
+  /** Sentinel charId for wide-char continuation cells (width=0).
+   *  DomRenderer skips these — the wide char already spans 2 columns.
+   *  Uses a private-use Unicode codepoint that xterm.js will never return. */
+  static readonly CONTINUATION_ID = 2;
+
+  private strings: string[] = [' ', '', '\uE000']; // 0=space, 1=empty, 2=continuation (PUA)
   private map = new Map<string, number>([
     [' ', 0],
     ['', 1],
+    ['\uE000', 2],
   ]);
   private ascii = new Int32Array(128).fill(-1);
 
@@ -257,8 +263,8 @@ export class ScreenBuffer {
           const width = cell.getWidth();
 
           if (width === 0) {
-            // Continuation of a wide char — render as empty
-            charId = 1; // empty
+            // Continuation cell of a wide char — DomRenderer skips these
+            charId = CharPool.CONTINUATION_ID;
             styleId = this.stylePool.defaultStyleId;
           } else {
             charId = this.charPool.intern(chars || ' ');

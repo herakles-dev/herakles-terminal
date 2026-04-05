@@ -26,6 +26,8 @@ interface FloatingInputProps {
   onInput: (data: string) => void;
   enabled: boolean;
   windowId: string;
+  /** 'terminal' = regular Linux shell, 'agent' = Claude Code, 'media' = player */
+  windowType: 'terminal' | 'media' | 'agent';
 }
 
 // Inline quick keys — all essential terminal operations in a scrollable row
@@ -48,15 +50,21 @@ const INLINE_KEYS = [
 
 function useKeyboardOffset(): number {
   const [offset, setOffset] = useState(0);
+  const rafRef = useRef<number>(0);
 
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
 
     const update = () => {
-      const keyboardHeight = window.innerHeight - vv.height;
-      const scrollOffset = vv.offsetTop;
-      setOffset(Math.max(0, keyboardHeight - scrollOffset));
+      // RAF-batch: coalesce rapid visualViewport events during keyboard animation
+      // (iOS fires 5-10 resize+scroll events over ~300ms keyboard transition)
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        const keyboardHeight = window.innerHeight - vv.height;
+        const scrollOffset = vv.offsetTop;
+        setOffset(Math.max(0, keyboardHeight - scrollOffset));
+      });
     };
 
     vv.addEventListener('resize', update);
@@ -66,18 +74,29 @@ function useKeyboardOffset(): number {
     return () => {
       vv.removeEventListener('resize', update);
       vv.removeEventListener('scroll', update);
+      cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
   return offset;
 }
 
+// Keys that should NOT be sent as ANSI escapes to Claude/agent windows.
+// Claude Code has its own UI navigation for these — sending raw escapes interferes.
+// For regular terminals, these ARE sent (history navigation, cursor movement).
+const CLAUDE_RESERVED_KEY_IDS = new Set(['up', 'down', 'left', 'right']);
+
+// Quick keys that insert into the floating input field (typeable characters you compose
+// into commands) rather than sending directly to the terminal.
+const INSERT_INTO_INPUT_KEY_IDS = new Set(['slash', 'tilde']);
+
 export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>(
-  ({ onInput, enabled, windowId }, ref) => {
+  ({ onInput, enabled, windowId, windowType }, ref) => {
     const inputRef = useRef<HTMLInputElement>(null);
     const composingRef = useRef(false);
     const prevWindowIdRef = useRef(windowId);
     const keyboardOffset = useKeyboardOffset();
+    const isTerminal = windowType === 'terminal';
 
     // Clear state on window switch
     useEffect(() => {
@@ -87,12 +106,12 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
       }
     }, [windowId]);
 
-    // Auto-focus when enabled
+    // Auto-focus when enabled or window switches
     useEffect(() => {
       if (enabled) {
         requestAnimationFrame(() => inputRef.current?.focus());
       }
-    }, [enabled]);
+    }, [enabled, windowId]);
 
     // Prevent iOS pull-to-refresh (only outside terminal viewport)
     useEffect(() => {
@@ -126,7 +145,6 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
       switch (e.key) {
         case 'Enter':
           e.preventDefault();
-          // Send current content + carriage return
           if (inputRef.current) {
             const val = inputRef.current.value;
             if (val) onInput(val);
@@ -139,18 +157,33 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
             e.preventDefault();
             onInput('\x7f');
           }
-          // If input has content, let browser handle deletion
-          // The onChange handler will pick up the diff
           break;
         case 'ArrowUp':
-          e.preventDefault();
-          onInput('\x1b[A');
-          if (inputRef.current) inputRef.current.value = '';
+          if (isTerminal) {
+            e.preventDefault();
+            onInput('\x1b[A');
+            if (inputRef.current) inputRef.current.value = '';
+          }
+          // Claude/agent: let browser handle (cursor nav in input field)
           break;
         case 'ArrowDown':
-          e.preventDefault();
-          onInput('\x1b[B');
-          if (inputRef.current) inputRef.current.value = '';
+          if (isTerminal) {
+            e.preventDefault();
+            onInput('\x1b[B');
+            if (inputRef.current) inputRef.current.value = '';
+          }
+          break;
+        case 'ArrowLeft':
+          if (isTerminal) {
+            e.preventDefault();
+            onInput('\x1b[D');
+          }
+          break;
+        case 'ArrowRight':
+          if (isTerminal) {
+            e.preventDefault();
+            onInput('\x1b[C');
+          }
           break;
         case 'Tab':
           e.preventDefault();
@@ -175,13 +208,11 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
           onInput(String.fromCharCode(code - 64));
         }
       }
-    }, [onInput]);
+    }, [onInput, isTerminal]);
 
-    // Character-by-character for interactive programs: send each new char
+    // Accumulate in the floating input — sent on Enter, Tab, etc.
     const handleInput = useCallback(() => {
       if (composingRef.current) return;
-      // We let the input accumulate — it's sent on Enter, Tab, or ArrowUp/Down
-      // This gives the user a visible command line experience
     }, []);
 
     const handleCompositionStart = useCallback(() => {
@@ -201,10 +232,12 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
       }
     }, [onInput]);
 
+    // Placeholder text changes based on window type
+    const placeholder = isTerminal ? 'terminal...' : 'message...';
+
     // --- Quick key handler ---
-    const handleQuickKey = useCallback((value: string) => {
+    const handleQuickKey = useCallback((keyId: string, value: string) => {
       if (value === '__FIND__') {
-        // Dispatch synthetic Ctrl+F to trigger search overlay
         const termContainer = document.querySelector('[data-renderer="dom"]');
         if (termContainer) {
           termContainer.dispatchEvent(new KeyboardEvent('keydown', {
@@ -213,17 +246,29 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
         }
         return;
       }
+      // For Claude/agent windows, skip reserved keys (arrows) — Claude handles its own nav
+      if (!isTerminal && CLAUDE_RESERVED_KEY_IDS.has(keyId)) {
+        return;
+      }
+      // Typeable characters (/, ~) insert into the floating input for command composition
+      if (INSERT_INTO_INPUT_KEY_IDS.has(keyId) && inputRef.current) {
+        const el = inputRef.current;
+        const pos = el.selectionStart ?? el.value.length;
+        el.value = el.value.slice(0, pos) + value + el.value.slice(pos);
+        el.selectionStart = el.selectionEnd = pos + value.length;
+        navigator.vibrate?.(10);
+        requestAnimationFrame(() => el.focus());
+        return;
+      }
       // Send any pending input first, then the quick key
       if (inputRef.current?.value) {
         onInput(inputRef.current.value);
         inputRef.current.value = '';
       }
       onInput(value);
-      // Haptic feedback
       navigator.vibrate?.(10);
-      // Re-focus input
       requestAnimationFrame(() => inputRef.current?.focus());
-    }, [onInput]);
+    }, [onInput, isTerminal]);
 
     if (!enabled) return null;
 
@@ -259,30 +304,37 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
             msOverflowStyle: 'none',
           }}
         >
-          {INLINE_KEYS.map(key => (
-            <button
-              key={key.id}
-              onClick={() => handleQuickKey(key.value)}
-              title={key.title}
-              style={{
-                flexShrink: 0,
-                padding: '4px 10px',
-                fontSize: 13,
-                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                fontWeight: 500,
-                color: 'accent' in key && key.accent ? '#f87171' : key.id === 'claude' ? '#00d4ff' : '#a1a1aa',
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                borderRadius: 6,
-                cursor: 'pointer',
-                WebkitTapHighlightColor: 'transparent',
-                touchAction: 'manipulation',
-                lineHeight: '1.2',
-              }}
-            >
-              {key.label}
-            </button>
-          ))}
+          {INLINE_KEYS.map(key => {
+            // For Claude/agent windows, dim arrow keys to signal they're inactive
+            const isReserved = !isTerminal && CLAUDE_RESERVED_KEY_IDS.has(key.id);
+            return (
+              <button
+                key={key.id}
+                onClick={() => handleQuickKey(key.id, key.value)}
+                title={isReserved ? `${key.title} (Claude UI)` : key.title}
+                style={{
+                  flexShrink: 0,
+                  padding: '4px 10px',
+                  fontSize: 13,
+                  fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                  fontWeight: 500,
+                  color: isReserved
+                    ? '#52525b'
+                    : 'accent' in key && key.accent ? '#f87171' : key.id === 'claude' ? '#00d4ff' : '#a1a1aa',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: 6,
+                  cursor: isReserved ? 'default' : 'pointer',
+                  WebkitTapHighlightColor: 'transparent',
+                  touchAction: 'manipulation',
+                  lineHeight: '1.2',
+                  opacity: isReserved ? 0.4 : 1,
+                }}
+              >
+                {key.label}
+              </button>
+            );
+          })}
         </div>
 
         {/* Input row */}
@@ -317,7 +369,7 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
               autoComplete="off"
               spellCheck={false}
               enterKeyHint="send"
-              placeholder="command..."
+              placeholder={placeholder}
               data-window-id={windowId}
               aria-label="Terminal command input"
               onKeyDown={handleKeyDown}

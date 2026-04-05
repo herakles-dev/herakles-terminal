@@ -159,15 +159,21 @@ export default function SplitView({
   });
 
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
     const checkMobile = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
+      // Debounce: orientation change fires resize multiple times over ~200ms.
+      // Without this, SplitView re-renders 3-5 times during keyboard toggle.
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        setIsMobile(window.innerWidth < 768);
+      }, 150);
     };
-    
+
     window.addEventListener('resize', checkMobile);
     window.addEventListener('orientationchange', checkMobile);
-    
+
     return () => {
+      clearTimeout(timer);
       window.removeEventListener('resize', checkMobile);
       window.removeEventListener('orientationchange', checkMobile);
     };
@@ -825,92 +831,78 @@ export default function SplitView({
 
   if (isMobile) {
     const activeWindow = visibleWindows.find(w => w.id === mobileActiveTab) || visibleWindows[0];
-    
+
     return (
       <div ref={containerRef} className="absolute inset-0 bg-[#0a0a0f] flex flex-col">
-        {visibleWindows.length > 1 && (
-          <div className="flex bg-[#0a0a0f] border-b border-[#27272a] overflow-x-auto">
+        {/* Slim tab bar — always visible, even with 1 window */}
+        <div className="flex items-center bg-[#0a0a0f] border-b border-[#27272a]" style={{ minHeight: 32, paddingLeft: 'env(safe-area-inset-left, 0)', paddingRight: 'env(safe-area-inset-right, 0)' }}>
+          <div className="flex flex-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
             {visibleWindows.map((window) => (
-              <button
+              <div
                 key={window.id}
-                onClick={() => {
-                  setMobileActiveTab(window.id);
-                  onWindowFocus(window.id);
-                }}
-                className={`flex items-center gap-2 px-4 py-2.5 min-w-max text-base transition-colors ${
+                className={`flex items-center min-w-0 transition-colors ${
                   mobileActiveTab === window.id
-                    ? 'text-white bg-[#18181b] border-b-2 border-[#00d4ff]'
-                    : 'text-[#a1a1aa] hover:text-white'
+                    ? 'bg-[#18181b] border-b border-[#00d4ff]'
+                    : 'hover:bg-[#18181b]/50'
                 }`}
+                style={{ maxWidth: 160 }}
               >
-                <span className={`w-1.5 h-1.5 rounded-full ${window.isMain ? 'bg-[#00d4ff]' : 'bg-[#22c55e]'}`} />
-                <span className="truncate max-w-[100px]">{window.name}</span>
-              </button>
-            ))}
-            <button
-              onClick={onAddWindow}
-              className="flex items-center justify-center px-4 py-2.5 text-[#8a8a92] hover:text-[#00d4ff] transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {activeWindow && (
-          <div className="flex-1 min-h-0 flex flex-col bg-[#18181b]">
-            <div className="flex items-center justify-between px-3 py-1.5 bg-[#0a0a0f] border-b border-[#27272a]">
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${activeWindow.isMain ? 'bg-[#00d4ff]' : 'bg-[#22c55e]'}`} />
-                <span className="text-base text-[#d4d4d8]">{activeWindow.name}</span>
-              </div>
-              <div className="window-controls flex items-center gap-1">
-                {!activeWindow.isMain && visibleWindows.length > 1 && (
-                  <button
-                    onClick={() => onWindowClose(activeWindow.id)}
-                    className="p-2 text-[#8a8a92] hover:text-[#ef4444] hover:bg-[#27272a] rounded transition-colors"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="flex-1 min-h-0 relative" style={{ touchAction: 'pan-y' }}>
-              {visibleWindows.map(window => (
-                <div 
-                  key={window.id}
-                  className="terminal-wrapper"
-                  style={{ 
-                    display: window.id === activeWindow.id ? 'flex' : 'none', 
-                    touchAction: 'pan-y',
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0
+                <button
+                  onClick={() => {
+                    setMobileActiveTab(window.id);
+                    onWindowFocus(window.id);
                   }}
+                  className={`flex items-center gap-1.5 pl-2.5 pr-1 py-1.5 min-w-0 text-xs ${
+                    mobileActiveTab === window.id ? 'text-white' : 'text-[#71717a]'
+                  }`}
                 >
-                  {renderWindow(window.id, window.id === activeWindow.id, window.type || 'terminal')}
-                </div>
-              ))}
-            </div>
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${window.isMain ? 'bg-[#00d4ff]' : 'bg-[#22c55e]'}`} />
+                  <span className="truncate">{window.name}</span>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onWindowClose(window.id);
+                  }}
+                  className="flex-shrink-0 p-2 mr-0.5 text-[#52525b] hover:text-[#ef4444] rounded transition-colors"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
           </div>
-        )}
-
-        {visibleWindows.length === 1 && (
           <button
             onClick={onAddWindow}
-            className="absolute bottom-2 right-2 flex items-center gap-1 px-4 py-2.5 bg-[#18181b]/90 backdrop-blur-sm border border-[#27272a] rounded-lg text-[#a1a1aa] hover:text-[#00d4ff] hover:border-[#00d4ff]/50 transition-colors shadow-lg"
-            style={{ zIndex: 1000 }}
+            className="flex-shrink-0 flex items-center justify-center px-2 py-1.5 text-[#52525b] hover:text-[#00d4ff] transition-colors"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
             </svg>
-            <span className="text-sm">New</span>
           </button>
+        </div>
+
+        {activeWindow && (
+          <div className="flex-1 min-h-0 relative bg-[#18181b]" style={{ touchAction: 'pan-y' }}>
+            {visibleWindows.map(window => (
+              <div
+                key={window.id}
+                className="terminal-wrapper"
+                style={{
+                  display: window.id === activeWindow.id ? 'flex' : 'none',
+                  touchAction: 'pan-y',
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0
+                }}
+              >
+                {renderWindow(window.id, window.id === activeWindow.id, window.type || 'terminal')}
+              </div>
+            ))}
+          </div>
         )}
       </div>
     );

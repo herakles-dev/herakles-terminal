@@ -1,5 +1,28 @@
 import type { WebGLHealthMonitor } from './WebGLHealthMonitor';
-import { filterThinkingOutput as sharedFilterThinkingOutput, filterCarriageReturnThinking } from '@shared/terminalFilters';
+import { ANSI_STRIP_REGEX } from '@shared/terminalFilters';
+
+/**
+ * Client-side thinking line detector — filters dots but NOT braille spinners.
+ * The shared isThinkingLine() filters braille too, which kills Claude Code's
+ * Ink spinner animation. This version allows braille through so the DOM
+ * renderer can animate ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ spinners via \r overwrites.
+ */
+function isDotArtifact(stripped: string): boolean {
+  if (stripped.length === 0) return false;
+  // Pure dots/whitespace/bullet chars — always artifacts
+  if (/^[.\s\u00B7\u2022\u2026]+$/.test(stripped)) return true;
+  // 20+ consecutive dots — tmux SIGWINCH resize noise
+  if (/\.{20,}/.test(stripped)) return true;
+  // Lines with paths/URLs/structured content — never filter
+  if (/[/\\:[\]#@]/.test(stripped)) return false;
+  // 80%+ dots — likely artifacts
+  const dotCount = (stripped.match(/\./g) || []).length;
+  const totalNonWhitespace = stripped.replace(/\s/g, '').length;
+  if (totalNonWhitespace > 0 && dotCount / totalNonWhitespace >= 0.8 && dotCount >= 3) return true;
+  return false;
+  // NOTE: braille lines (^[\u2800-\u28FF]) are intentionally NOT filtered here.
+  // The shared isThinkingLine() filters them — we skip that for the DOM renderer.
+}
 
 export interface OutputPipelineConfig {
   flushIntervalMs?: number;
@@ -54,7 +77,7 @@ export type FlushCallback = (windowId: string, data: string) => void;
 export type ReplayRequestCallback = (windowId: string, afterSeq: number) => void;
 export type BackpressureCallback = (windowId: string, throttle: boolean) => void;
 
-// Re-export shared filters
+// Re-export shared filters (server-side still uses full filters via TmuxManager)
 export { filterThinkingOutput, filterCarriageReturnThinking, filterAllThinkingOutput } from '@shared/terminalFilters';
 
 export class OutputPipelineManager {
@@ -64,13 +87,15 @@ export class OutputPipelineManager {
   private onBackpressure?: BackpressureCallback;
   private healthMonitor?: WebGLHealthMonitor;
   private forcedThrottleMode?: 'light' | 'heavy' | 'critical';
-  // Mobile devices get 50% lower thresholds (weaker GPUs)
+  // Threshold scale for volume-based throttling.
+  // Was 0.5 for mobile (GPU protection for WebGL renderer) — DOM renderer v2 doesn't
+  // need aggressive throttling since it uses row-level dirty tracking, not GPU compositing.
   private readonly thresholdScale: number;
 
   constructor(onFlush: FlushCallback, config?: OutputPipelineConfig) {
     this.onFlush = onFlush;
     this.healthMonitor = config?.healthMonitor;
-    this.thresholdScale = config?.isMobile ? 0.5 : 1.0;
+    this.thresholdScale = 1.0;
   }
 
   /**
@@ -100,15 +125,9 @@ export class OutputPipelineManager {
     this.forcedThrottleMode = mode;
   }
 
-  /**
-   * Cancel a pending flush timer, handling both RAF and setTimeout
-   * Since throttle level can change, we cancel both ways to be safe
-   */
   private cancelFlushTimer(state: WindowOutputState): void {
     if (state.flushTimer !== null) {
-      // Cancel both setTimeout and RAF - one will no-op
       clearTimeout(state.flushTimer);
-      cancelAnimationFrame(state.flushTimer);
       state.flushTimer = null;
     }
   }
@@ -205,17 +224,13 @@ export class OutputPipelineManager {
       effectiveMode === 'heavy' ? HEAVY_THROTTLE_DELAY :
       effectiveMode === 'light' ? LIGHT_THROTTLE_DELAY : 0;
 
-    if (delay > 0) {
-      // Use setTimeout for throttled flush
-      state.flushTimer = window.setTimeout(() => {
-        this.performFlush(windowId);
-      }, delay) as unknown as number;
-    } else {
-      // Use RAF for normal flush (maximum responsiveness)
-      state.flushTimer = requestAnimationFrame(() => {
-        this.performFlush(windowId);
-      });
-    }
+    // Always use setTimeout for flushing — never RAF.
+    // RAF gets throttled by mobile browsers during low-interaction periods,
+    // which blocks data from reaching the terminal (spinner freezes, output stalls).
+    // setTimeout(0) is ~4ms (browser minimum) — faster than RAF's ~16ms vsync anyway.
+    state.flushTimer = window.setTimeout(() => {
+      this.performFlush(windowId);
+    }, delay) as unknown as number;
   }
 
   private performFlush(windowId: string): void {
@@ -243,16 +258,59 @@ export class OutputPipelineManager {
   }
 
   /**
-   * Filter Claude Code thinking output from live data.
-   * Prevents dots and spinner characters from accumulating in the terminal.
-   * Matches the filter in TmuxManager.capturePane() for consistency.
+   * Client-side output filter for DOM renderer v2.
+   *
+   * Two-stage filter like the shared version, but uses isDotArtifact() instead
+   * of isThinkingLine() — this preserves braille spinner animation (⠋⠙⠹...)
+   * while still filtering dot artifacts from tmux SIGWINCH and Claude thinking dots.
+   *
+   * Stage 1: \r-delimited segment filter (dot sequences overwriting via carriage return)
+   * Stage 2: Line-based filter (remaining dot-only lines)
    */
   private filterThinkingOutput(data: string): string {
-    // Two-stage filter:
-    // 1. Strip \r-delimited spinner overwrites (⠋ Thinking...\r⠙ Thinking...)
-    // 2. Strip remaining line-based thinking output (dots, braille prefixes)
-    const crFiltered = filterCarriageReturnThinking(data);
-    return sharedFilterThinkingOutput(crFiltered);
+    // Stage 1: Filter \r-delimited thinking dots (.\r..\r...\r...)
+    // Keeps braille spinners (⠋ Thinking...\r⠙ Thinking...) since isDotArtifact skips braille
+    let filtered = data;
+    if (filtered.includes('\r')) {
+      const lines = filtered.split(/(\r\n|\n)/);
+      const crResult: string[] = [];
+      for (const line of lines) {
+        if (line === '\r\n' || line === '\n') { crResult.push(line); continue; }
+        if (line === '\r') { crResult.push(line); continue; }
+        const segments = line.split('\r');
+        if (segments.length <= 1) { crResult.push(line); continue; }
+        // Walk segments from last to first, keep first non-dot segment
+        let kept: string | null = null;
+        let needsCR = false;
+        for (let i = segments.length - 1; i >= 0; i--) {
+          const seg = segments[i];
+          const stripped = seg.replace(ANSI_STRIP_REGEX, '').trim();
+          if (stripped.length > 0 && isDotArtifact(stripped)) continue;
+          if (seg.length === 0) continue;
+          kept = seg;
+          needsCR = i > 0;
+          break;
+        }
+        if (kept !== null) {
+          crResult.push(needsCR ? '\r' + kept : kept);
+        }
+      }
+      filtered = crResult.join('');
+    }
+
+    // Stage 2: Line-based dot artifact filter
+    const parts = filtered.split(/(\r\n|\r|\n)/);
+    const result: string[] = [];
+    for (const part of parts) {
+      if (part === '\r\n' || part === '\r' || part === '\n') {
+        result.push(part);
+        continue;
+      }
+      const stripped = part.replace(ANSI_STRIP_REGEX, '').trim();
+      if (stripped.length > 0 && isDotArtifact(stripped)) continue;
+      result.push(part);
+    }
+    return result.join('');
   }
 
   /**
@@ -390,9 +448,9 @@ export class OutputPipelineManager {
           // Immediate flush after resize — bypass volume-based throttle to avoid
           // 100-200ms delay when terminal is in heavy/critical output mode.
           this.cancelFlushTimer(state);
-          state.flushTimer = requestAnimationFrame(() => {
+          state.flushTimer = window.setTimeout(() => {
             this.performFlush(windowId);
-          });
+          }, 0) as unknown as number;
         }
       }
     }

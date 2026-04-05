@@ -2,38 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OutputPipelineManager } from '../OutputPipelineManager';
 
 describe('OutputPipelineManager', () => {
-  let rafCallbacks: Map<number, FrameRequestCallback>;
-  let rafId: number;
-  let originalRAF: typeof requestAnimationFrame;
-  let originalCAF: typeof cancelAnimationFrame;
-
   beforeEach(() => {
-    rafCallbacks = new Map();
-    rafId = 0;
-    originalRAF = globalThis.requestAnimationFrame;
-    originalCAF = globalThis.cancelAnimationFrame;
-
-    globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-      const id = ++rafId;
-      rafCallbacks.set(id, callback);
-      return id;
-    });
-
-    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-      rafCallbacks.delete(id);
-    });
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
-    globalThis.requestAnimationFrame = originalRAF;
-    globalThis.cancelAnimationFrame = originalCAF;
+    vi.useRealTimers();
   });
 
-  const flushRAF = () => {
-    rafCallbacks.forEach((callback, id) => {
-      callback(performance.now());
-      rafCallbacks.delete(id);
-    });
+  /** Flush pending setTimeout(0) timers — pipeline uses setTimeout for all scheduling. */
+  const flushTimers = () => {
+    vi.advanceTimersByTime(1);
   };
 
   it('enqueue buffers data correctly', () => {
@@ -45,7 +24,7 @@ describe('OutputPipelineManager', () => {
 
     expect(onFlush).not.toHaveBeenCalled();
 
-    flushRAF();
+    flushTimers();
 
     expect(onFlush).toHaveBeenCalledTimes(1);
     expect(onFlush).toHaveBeenCalledWith('window-1', 'hello world');
@@ -59,9 +38,8 @@ describe('OutputPipelineManager', () => {
     const flushed = pipeline.flush('window-1');
 
     expect(flushed).toBe('test data');
-    expect(cancelAnimationFrame).toHaveBeenCalled();
 
-    flushRAF();
+    flushTimers();
     expect(onFlush).not.toHaveBeenCalled();
   });
 
@@ -72,7 +50,7 @@ describe('OutputPipelineManager', () => {
     pipeline.setResizePending('window-1', true);
     pipeline.enqueue('window-1', 'during resize');
 
-    flushRAF();
+    flushTimers();
     expect(onFlush).not.toHaveBeenCalled();
 
     expect(pipeline.isResizePending('window-1')).toBe(true);
@@ -83,7 +61,7 @@ describe('OutputPipelineManager', () => {
     const pipeline = new OutputPipelineManager(onFlush);
 
     pipeline.enqueue('window-1', 'before');
-    flushRAF();
+    flushTimers();
     expect(onFlush).toHaveBeenCalledWith('window-1', 'before');
     onFlush.mockClear();
 
@@ -92,11 +70,11 @@ describe('OutputPipelineManager', () => {
 
     pipeline.setResizePending('window-1', false);
 
-    flushRAF();
+    flushTimers();
     expect(onFlush).toHaveBeenCalledWith('window-1', 'during');
   });
 
-  it('RAF scheduling coalesces rapid enqueues', () => {
+  it('timer scheduling coalesces rapid enqueues', () => {
     const onFlush = vi.fn();
     const pipeline = new OutputPipelineManager(onFlush);
 
@@ -105,13 +83,10 @@ describe('OutputPipelineManager', () => {
     pipeline.enqueue('window-1', 'c');
     pipeline.enqueue('window-1', 'd');
 
-    // With coalesced scheduling, RAF is scheduled once and subsequent
+    // With coalesced scheduling, the timer is scheduled once and subsequent
     // enqueues just add to the buffer without canceling/rescheduling.
-    // This prevents frame drops during high-volume output.
-    expect(cancelAnimationFrame).not.toHaveBeenCalled();
-    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
 
-    flushRAF();
+    flushTimers();
 
     expect(onFlush).toHaveBeenCalledTimes(1);
     expect(onFlush).toHaveBeenCalledWith('window-1', 'abcd');
@@ -124,7 +99,7 @@ describe('OutputPipelineManager', () => {
     pipeline.enqueue('window-1', 'first');
     pipeline.enqueue('window-2', 'second');
 
-    flushRAF();
+    flushTimers();
 
     expect(onFlush).toHaveBeenCalledTimes(2);
     expect(onFlush).toHaveBeenCalledWith('window-1', 'first');
@@ -138,7 +113,7 @@ describe('OutputPipelineManager', () => {
     pipeline.enqueue('window-1', 'data');
     pipeline.clear('window-1');
 
-    flushRAF();
+    flushTimers();
     expect(onFlush).not.toHaveBeenCalled();
 
     const stats = pipeline.getStats();
@@ -153,7 +128,7 @@ describe('OutputPipelineManager', () => {
     pipeline.enqueue('window-2', 'data2');
     pipeline.clearAll();
 
-    flushRAF();
+    flushTimers();
     expect(onFlush).not.toHaveBeenCalled();
 
     const stats = pipeline.getStats();
@@ -194,16 +169,13 @@ describe('OutputPipelineManager', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Add data to main buffer
       pipeline.enqueue('window-1', 'main buffer data');
-      // Add data to resize buffer
       pipeline.setResizePending('window-1', true);
       pipeline.enqueue('window-1', 'resize buffer data');
 
       const statsBefore = pipeline.getStats();
       expect(statsBefore.totalBuffered).toBeGreaterThan(0);
 
-      // Enter restore mode - should clear all buffers
       pipeline.setRestoreInProgress('window-1', true);
 
       const statsAfter = pipeline.getStats();
@@ -215,12 +187,9 @@ describe('OutputPipelineManager', () => {
       const pipeline = new OutputPipelineManager(onFlush);
 
       pipeline.enqueue('window-1', 'data');
-      // Flush is scheduled via RAF
-
       pipeline.setRestoreInProgress('window-1', true);
 
-      flushRAF();
-      // Flush should have been cancelled
+      flushTimers();
       expect(onFlush).not.toHaveBeenCalled();
     });
 
@@ -231,11 +200,9 @@ describe('OutputPipelineManager', () => {
       pipeline.setRestoreInProgress('window-1', true);
       pipeline.enqueue('window-1', 'should be discarded');
 
-      // Exit restore mode
       pipeline.setRestoreInProgress('window-1', false);
 
-      flushRAF();
-      // Nothing should have been flushed
+      flushTimers();
       expect(onFlush).not.toHaveBeenCalled();
 
       const stats = pipeline.getStats();
@@ -266,17 +233,14 @@ describe('OutputPipelineManager', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Enter restore mode
       pipeline.setRestoreInProgress('window-1', true);
       pipeline.enqueue('window-1', 'discarded');
 
-      // Exit restore mode
       pipeline.setRestoreInProgress('window-1', false);
 
-      // Now enqueue should work normally
       pipeline.enqueue('window-1', 'normal data');
 
-      flushRAF();
+      flushTimers();
       expect(onFlush).toHaveBeenCalledTimes(1);
       expect(onFlush).toHaveBeenCalledWith('window-1', 'normal data');
     });
@@ -289,7 +253,7 @@ describe('OutputPipelineManager', () => {
       pipeline.enqueue('window-1', 'discarded for window-1');
       pipeline.enqueue('window-2', 'kept for window-2');
 
-      flushRAF();
+      flushTimers();
       expect(onFlush).toHaveBeenCalledTimes(1);
       expect(onFlush).toHaveBeenCalledWith('window-2', 'kept for window-2');
     });
@@ -298,105 +262,67 @@ describe('OutputPipelineManager', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Set up resize pending
       pipeline.setResizePending('window-1', true);
       pipeline.enqueue('window-1', 'resize data');
 
-      // Enter restore mode
       pipeline.setRestoreInProgress('window-1', true);
 
-      // Exit resize mode
       pipeline.setResizePending('window-1', false);
 
-      flushRAF();
-      // Nothing should flush because restore mode cleared the resize buffer
+      flushTimers();
       expect(onFlush).not.toHaveBeenCalled();
     });
   });
 
   describe('forced throttle mode', () => {
     it('should apply forced throttle mode when set', () => {
-      vi.useFakeTimers();
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Set forced throttle mode to 'critical'
       pipeline.setForcedThrottleMode('critical');
-
       pipeline.enqueue('window-1', 'data');
 
-      // Critical mode uses 200ms setTimeout
       expect(onFlush).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(200);
       expect(onFlush).toHaveBeenCalledWith('window-1', 'data');
-
-      vi.useRealTimers();
     });
 
     it('should use most conservative mode between forced and calculated', () => {
-      vi.useFakeTimers();
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Set forced mode to 'light' (32ms delay)
       pipeline.setForcedThrottleMode('light');
-
-      // Enqueue small data (would normally be 'normal' mode = 0ms)
       pipeline.enqueue('window-1', 'small data');
 
-      // Should use 'light' mode (32ms) since it's more conservative than 'normal'
       expect(onFlush).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(32);
       expect(onFlush).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
     });
 
     it('should prefer calculated mode if more conservative than forced', () => {
-      vi.useFakeTimers();
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Set forced mode to 'light' (32ms delay)
       pipeline.setForcedThrottleMode('light');
 
-      // Generate enough data to trigger 'critical' calculated mode (>500KB/s)
       const largeData = 'x'.repeat(600_000);
       pipeline.enqueue('window-1', largeData);
 
-      // Should use 'critical' mode (200ms) since it's more conservative than 'light'
       expect(onFlush).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(32);
-      expect(onFlush).not.toHaveBeenCalled(); // Not yet
+      expect(onFlush).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(168); // Total 200ms
       expect(onFlush).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
     });
 
     it('should clear forced mode when set to undefined', () => {
-      vi.useFakeTimers();
-
-      // Re-setup RAF mock after fake timers to ensure it's captured
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Set forced mode
       pipeline.setForcedThrottleMode('heavy');
       pipeline.enqueue('window-1', 'data1');
 
@@ -405,27 +331,19 @@ describe('OutputPipelineManager', () => {
 
       onFlush.mockClear();
 
-      // Clear forced mode
       pipeline.setForcedThrottleMode(undefined);
       pipeline.enqueue('window-1', 'data2');
 
-      // Should use normal mode (RAF, effectively immediate)
-      localRafCallbacks.forEach((callback) => {
-        callback(performance.now());
-      });
-      localRafCallbacks.clear();
+      // Normal mode = setTimeout(0)
+      flushTimers();
 
       expect(onFlush).toHaveBeenCalledWith('window-1', 'data2');
-
-      vi.useRealTimers();
     });
 
     it('should handle mode transitions correctly', () => {
-      vi.useFakeTimers();
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Start with 'light' mode
       pipeline.setForcedThrottleMode('light');
       pipeline.enqueue('window-1', 'data1');
 
@@ -434,43 +352,25 @@ describe('OutputPipelineManager', () => {
 
       onFlush.mockClear();
 
-      // Transition to 'critical' mode
       pipeline.setForcedThrottleMode('critical');
       pipeline.enqueue('window-1', 'data2');
 
       vi.advanceTimersByTime(100);
-      expect(onFlush).not.toHaveBeenCalled(); // Not yet (needs 200ms)
+      expect(onFlush).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(100); // Total 200ms
       expect(onFlush).toHaveBeenCalledWith('window-1', 'data2');
-
-      vi.useRealTimers();
     });
   });
 
   describe('lowered throttle thresholds', () => {
     it('should activate light throttle at 25KB/s', () => {
-      vi.useFakeTimers();
-
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
       // Seed the throttle window: enqueue small data, advance 1s to reset
       pipeline.enqueue('window-1', 'seed');
-      vi.advanceTimersByTime(1100); // Ensure window resets
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
-      localRafCallbacks.clear();
+      vi.advanceTimersByTime(1100);
       onFlush.mockClear();
 
       // Now enqueue 25KB — with fresh window, rate = 25KB/s → light throttle
@@ -482,144 +382,71 @@ describe('OutputPipelineManager', () => {
 
       vi.advanceTimersByTime(24);
       expect(onFlush).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
     });
 
-    it('should use RAF (normal mode) at 15KB/s', () => {
-      vi.useFakeTimers();
-
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
+    it('should use normal mode (setTimeout 0) at 15KB/s', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Seed the throttle window: enqueue small data, advance 1s to reset
+      // Seed the throttle window
       pipeline.enqueue('window-1', 'seed');
       vi.advanceTimersByTime(1100);
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
-      localRafCallbacks.clear();
       onFlush.mockClear();
 
-      // 15KB — below 20KB/s threshold → normal mode (RAF)
+      // 15KB — below 20KB/s threshold → normal mode (setTimeout 0)
       const data = 'x'.repeat(15_000);
       pipeline.enqueue('window-1', data);
 
-      expect(globalThis.requestAnimationFrame).toHaveBeenCalled();
-
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
+      // Normal mode flushes on next tick
+      flushTimers();
       expect(onFlush).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
     });
   });
 
   describe('Ink redraw coalescing', () => {
     it('detectInkRedraw matches erase+home sequence', () => {
-      vi.useFakeTimers();
-
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // Seed the throttle window to avoid burst spike
+      // Seed
       pipeline.enqueue('window-1', 'seed');
       vi.advanceTimersByTime(1100);
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
-      localRafCallbacks.clear();
       onFlush.mockClear();
 
       // Ink redraw: \x1b[2J (erase display) + \x1b[H (cursor home)
       const inkRedraw = '\x1b[2J\x1b[Hsome content here';
       pipeline.enqueue('window-1', inkRedraw);
 
-      // Small data may use RAF or light throttle depending on rate
       vi.advanceTimersByTime(24);
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
 
       expect(onFlush).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
     });
 
     it('replaces buffer during rapid Ink redraws', () => {
-      vi.useFakeTimers();
-
-      // Re-setup RAF mock
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
-      // First Ink redraw — sets lastEraseHomeTime
+      // All three redraws arrive before the flush timer fires (within same tick).
+      // The Ink coalescing detects rapid erase+home and replaces the buffer.
       const redraw1 = '\x1b[2J\x1b[HFrame 1';
       pipeline.enqueue('window-1', redraw1);
 
-      // Second Ink redraw within 50ms — should REPLACE buffer
-      vi.advanceTimersByTime(10);
+      // Simulate rapid redraws within <50ms (no timer advance between enqueues)
       const redraw2 = '\x1b[2J\x1b[HFrame 2';
       pipeline.enqueue('window-1', redraw2);
 
-      // Third redraw within 50ms
-      vi.advanceTimersByTime(10);
       const redraw3 = '\x1b[2J\x1b[HFrame 3';
       pipeline.enqueue('window-1', redraw3);
 
       // Flush — should only see the LAST frame (Frame 3)
-      vi.advanceTimersByTime(24); // light throttle after >3 redraws
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
+      flushTimers();
 
-      // The flushed data should be the last redraw, not all three concatenated
       const flushedData = onFlush.mock.calls.map(c => c[1]).join('');
       expect(flushedData).toContain('Frame 3');
-      // Should NOT contain Frame 1 content (it was replaced)
       expect(flushedData).not.toContain('Frame 1');
-
-      vi.useRealTimers();
     });
 
     it('does not coalesce redraws >50ms apart', () => {
-      vi.useFakeTimers();
-
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
 
@@ -627,9 +454,8 @@ describe('OutputPipelineManager', () => {
       const redraw1 = '\x1b[2J\x1b[HFrame 1';
       pipeline.enqueue('window-1', redraw1);
 
-      // Wait for flush (RAF)
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
-      localRafCallbacks.clear();
+      // Flush first frame
+      flushTimers();
       expect(onFlush).toHaveBeenCalledTimes(1);
       onFlush.mockClear();
 
@@ -638,86 +464,48 @@ describe('OutputPipelineManager', () => {
       const redraw2 = '\x1b[2J\x1b[HFrame 2';
       pipeline.enqueue('window-1', redraw2);
 
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
+      flushTimers();
       expect(onFlush).toHaveBeenCalledTimes(1);
       expect(onFlush).toHaveBeenCalledWith('window-1', redraw2);
-
-      vi.useRealTimers();
     });
   });
 
-  describe('mobile thresholds', () => {
-    it('should use 50% lower thresholds on mobile', () => {
-      vi.useFakeTimers();
-
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
+  describe('throttle thresholds', () => {
+    it('should use same thresholds on mobile and desktop (DOM renderer)', () => {
       const onFlush = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush, { isMobile: true });
 
-      // Seed the throttle window to avoid burst spike
+      // Seed
       pipeline.enqueue('window-1', 'seed');
       vi.advanceTimersByTime(1100);
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
-      localRafCallbacks.clear();
       onFlush.mockClear();
 
-      // 12KB/s — above mobile light threshold (20KB * 0.5 = 10KB) but below desktop
-      const data = 'x'.repeat(12_000);
+      // 15KB/s — below light threshold (20KB/s) → normal mode even on mobile
+      const data = 'x'.repeat(15_000);
       pipeline.enqueue('window-1', data);
 
-      // Should be in light throttle mode (24ms delay) on mobile
+      // Normal mode flushes on next tick
+      flushTimers();
+      expect(onFlush).toHaveBeenCalledTimes(1);
+    });
+
+    it('should activate light throttle above 20KB/s', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // Seed
+      pipeline.enqueue('window-1', 'seed');
+      vi.advanceTimersByTime(1100);
+      onFlush.mockClear();
+
+      // 25KB/s → light throttle (24ms)
+      const data = 'x'.repeat(25_000);
+      pipeline.enqueue('window-1', data);
+
       expect(onFlush).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(24);
       expect(onFlush).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
-    });
-
-    it('should use normal thresholds on desktop', () => {
-      vi.useFakeTimers();
-
-      const localRafCallbacks = new Map<number, FrameRequestCallback>();
-      let localRafId = 0;
-      globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-        const id = ++localRafId;
-        localRafCallbacks.set(id, callback);
-        return id;
-      });
-      globalThis.cancelAnimationFrame = vi.fn((id: number) => {
-        localRafCallbacks.delete(id);
-      });
-
-      const onFlush = vi.fn();
-      const pipeline = new OutputPipelineManager(onFlush, { isMobile: false });
-
-      // Seed the throttle window to avoid burst spike
-      pipeline.enqueue('window-1', 'seed');
-      vi.advanceTimersByTime(1100);
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
-      localRafCallbacks.clear();
-      onFlush.mockClear();
-
-      // 12KB/s — below desktop light threshold (20KB/s) → normal mode (RAF)
-      const data = 'x'.repeat(12_000);
-      pipeline.enqueue('window-1', data);
-
-      expect(globalThis.requestAnimationFrame).toHaveBeenCalled();
-
-      localRafCallbacks.forEach((cb) => cb(performance.now()));
-      expect(onFlush).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
     });
   });
 
@@ -728,7 +516,6 @@ describe('OutputPipelineManager', () => {
       const pipeline = new OutputPipelineManager(onFlush);
       pipeline.setBackpressureCallback(onBackpressure);
 
-      // Fill buffer to >80% of MAX_BUFFER_SIZE (512KB)
       const largeData = 'x'.repeat(420_000); // ~82% of 512KB
       pipeline.enqueue('window-1', largeData);
 
@@ -736,13 +523,11 @@ describe('OutputPipelineManager', () => {
     });
 
     it('should release backpressure after flush', () => {
-      vi.useFakeTimers();
       const onFlush = vi.fn();
       const onBackpressure = vi.fn();
       const pipeline = new OutputPipelineManager(onFlush);
       pipeline.setBackpressureCallback(onBackpressure);
 
-      // Fill buffer to trigger backpressure
       const largeData = 'x'.repeat(420_000);
       pipeline.enqueue('window-1', largeData);
 
@@ -753,8 +538,6 @@ describe('OutputPipelineManager', () => {
       vi.advanceTimersByTime(200);
 
       expect(onBackpressure).toHaveBeenCalledWith('window-1', false);
-
-      vi.useRealTimers();
     });
   });
 });

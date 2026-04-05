@@ -126,6 +126,15 @@
             "command": "/home/hercules/v11/hooks/fix-team-model"
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hercules/.claude/hooks/spawn-claude-window.py"
+          }
+        ]
       }
     ],
     "PostCompact": [

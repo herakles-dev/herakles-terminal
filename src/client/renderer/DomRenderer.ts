@@ -11,7 +11,7 @@
  */
 
 import type { TerminalTheme } from '@shared/types';
-import { type CellStyle, ColorMode, type ScreenBuffer, StyleFlags } from './ScreenBuffer.js';
+import { CharPool, type CellStyle, ColorMode, type ScreenBuffer, StyleFlags } from './ScreenBuffer.js';
 
 // ---------------------------------------------------------------------------
 // Static ANSI 256-color palette (indices 16-255, theme-independent)
@@ -189,6 +189,10 @@ export class DomRenderer {
 
     for (let x = 0; x < buffer.cols; x++) {
       const charId = buffer.getCharId(x, y);
+
+      // Skip wide-char continuation cells — the wide char already spans 2 columns
+      if (charId === CharPool.CONTINUATION_ID) continue;
+
       const styleId = buffer.getStyleId(x, y);
       const char = buffer.charPool.get(charId);
 
@@ -371,8 +375,9 @@ export class DomRenderer {
     if (bgCss) parts.push(`background-color:${bgCss}`);
 
     if (style.flags & StyleFlags.BOLD) parts.push('font-weight:bold');
-    if (style.flags & StyleFlags.DIM) parts.push('opacity:0.5');
+    if (style.flags & StyleFlags.DIM) parts.push('opacity:0.5;filter:brightness(0.75)');
     if (style.flags & StyleFlags.ITALIC) parts.push('font-style:italic');
+    if (style.flags & StyleFlags.BLINK) parts.push('animation:dom-term-text-blink 1s step-end infinite');
 
     const decorations: string[] = [];
     if (style.flags & StyleFlags.UNDERLINE) decorations.push('underline');

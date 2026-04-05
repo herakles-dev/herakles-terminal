@@ -20,15 +20,20 @@ const CTRL_ARROW: Record<string, string> = {
 
 function useKeyboardOffset(): number {
   const [offset, setOffset] = useState(0);
+  const rafRef = useRef<number>(0);
 
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
 
     const update = () => {
-      const keyboardHeight = window.innerHeight - vv.height;
-      const scrollOffset = vv.offsetTop;
-      setOffset(Math.max(0, keyboardHeight - scrollOffset));
+      // RAF-batch: coalesce rapid visualViewport events during keyboard animation
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        const keyboardHeight = window.innerHeight - vv.height;
+        const scrollOffset = vv.offsetTop;
+        setOffset(Math.max(0, keyboardHeight - scrollOffset));
+      });
     };
 
     vv.addEventListener('resize', update);
@@ -38,6 +43,7 @@ function useKeyboardOffset(): number {
     return () => {
       vv.removeEventListener('resize', update);
       vv.removeEventListener('scroll', update);
+      cancelAnimationFrame(rafRef.current);
     };
   }, []);
 

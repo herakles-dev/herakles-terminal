@@ -1972,11 +1972,16 @@ export default function App() {
   const [viewportHeight, setViewportHeight] = useState('100vh');
 
   useEffect(() => {
+    let rafId = 0;
     const updateViewport = () => {
-      if (window.visualViewport) {
-        const vh = window.visualViewport.height;
-        setViewportHeight(`${vh}px`);
-      }
+      // RAF-batch: coalesce rapid visualViewport events during keyboard animation.
+      // Without this, every keyboard frame triggers setState → full app re-render.
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        if (window.visualViewport) {
+          setViewportHeight(`${window.visualViewport.height}px`);
+        }
+      });
     };
 
     if (window.visualViewport) {
@@ -1986,6 +1991,7 @@ export default function App() {
     }
 
     return () => {
+      cancelAnimationFrame(rafId);
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', updateViewport);
         window.visualViewport.removeEventListener('scroll', updateViewport);
@@ -2286,6 +2292,7 @@ export default function App() {
           }}
           enabled={!showWelcome}
           windowId={activeWindowId ?? ''}
+          windowType={windows.find(w => w.id === activeWindowId)?.type ?? 'terminal'}
         />
       ) : quickKeysVisible ? (
         <QuickKeyBar onKey={handleQuickKey} visible={quickKeysVisible} onClose={() => setQuickKeysVisible(false)} onClear={handleClearLine} onRefocus={handleRefocusTerminal} />
