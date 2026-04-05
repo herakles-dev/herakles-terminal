@@ -117,19 +117,22 @@ body {
   background-color: var(--bg-secondary);
   display: flex;
   flex-direction: column;
-  contain: layout style;
+  contain: style;
 }
 
 .terminal-container {
   flex: 1;
   min-height: 0;
   width: 100%;
-  padding: 4px;
+  /* No padding here — DomTerminalCore's PADDING constant handles the visual
+     inset via absolute positioning on the viewport. Adding CSS padding here
+     would double-count: outer.getBoundingClientRect() already reflects the
+     parent's content area, then calculateTerminalDimensions subtracts PADDING
+     again for the viewport inset. */
   background-color: var(--bg-secondary);
   touch-action: pan-y pinch-zoom;
   display: flex;
   flex-direction: column;
-  contain: layout;
   isolation: isolate;
 }
 

@@ -100,6 +100,11 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
       // Wait for fonts to load before measuring
       const init = async () => {
         await document.fonts.ready;
+        // Wait one frame after font load for the browser to commit layout.
+        // Without this, getBoundingClientRect() on the outer div can return
+        // stale dimensions from the pre-font layout, producing wrong row counts
+        // that persist until a resize event (which may never come on desktop).
+        await new Promise<void>(r => requestAnimationFrame(() => r()));
         if (cancelled) return;
 
         invalidateFontCache();
@@ -237,11 +242,24 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           const backBuf = backBufferRef.current;
           if (!t || !r || !frontBuf || !backBuf) return;
 
-          // Determine which buffer slice to render
-          let startLine: number | undefined;
-          if (s && !s.isAtBottom()) {
-            const range = s.getViewportRange();
-            startLine = range.startLine;
+          // Defensive: ensure DomRenderer row count matches xterm's row count.
+          // During debounced resize, these can drift — stale row count means
+          // bottom rows won't render, appearing "frozen" on tall desktop windows.
+          r.ensureRows(t.rows);
+
+          // Always compute startLine from VirtualScroller rather than relying on
+          // xterm's buffer.viewportY. In headless mode (hidden container), viewportY
+          // can drift from the actual scroll position — causing the bottom portion
+          // of tall desktop windows to render stale content while the top scrolls.
+          const range = s?.getViewportRange();
+          let startLine = range?.startLine;
+
+          // Defensive clamp: ensure startLine + rows never exceeds the buffer.
+          // During resize transitions, stale viewportRows can push startLine too
+          // far, causing bottom rows to read past the buffer (rendering blank).
+          if (startLine !== undefined) {
+            const maxStart = Math.max(0, t.buffer.active.length - t.rows);
+            if (startLine > maxStart) startLine = maxStart;
           }
 
           backBuf.readFromXTermBuffer(t.buffer.active, t.cols, t.rows, startLine);
@@ -310,10 +328,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // and auto-scroll to bottom when pinned.
         const renderDisposable = term.onRender((_e) => {
           if (virtualScrollerRef.current) {
-            // xterm's buffer length changes when new lines are added.
-            // We pass 0 for now — onNewOutput only needs to know that something arrived;
-            // it re-reads totalLines internally from term.buffer.active.length.
-            virtualScrollerRef.current.onNewOutput(0);
+            virtualScrollerRef.current.onNewOutput();
           }
           scheduleRender();
         });
@@ -368,11 +383,14 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
           const dims = calculateTerminalDimensions(outer, fontFamily, fontSize, PADDING);
           if (dims.cols !== t.cols || dims.rows !== t.rows) {
+            // Update VirtualScroller BEFORE t.resize() — resize fires onRender
+            // synchronously, and onNewOutput() needs current viewportRows to
+            // compute scroll state correctly for tall desktop windows.
+            virtualScrollerRef.current?.setViewportRows(dims.rows);
             t.resize(dims.cols, dims.rows);
             frontBufferRef.current?.resize(dims.cols, dims.rows);
             backBufferRef.current?.resize(dims.cols, dims.rows);
             rendererRef.current?.ensureRows(dims.rows);
-            virtualScrollerRef.current?.setViewportRows(dims.rows);
             // RAF-batched full render (coalesces with onRender from term.resize)
             scheduleFullRender();
             onResize?.(dims.cols, dims.rows);
@@ -463,11 +481,11 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
       const dims = calculateTerminalDimensions(outerRef.current, fontFamily, fontSize, PADDING);
       if (dims.cols !== termRef.current.cols || dims.rows !== termRef.current.rows) {
+        virtualScrollerRef.current?.setViewportRows(dims.rows);
         termRef.current.resize(dims.cols, dims.rows);
         frontBufferRef.current?.resize(dims.cols, dims.rows);
         backBufferRef.current?.resize(dims.cols, dims.rows);
         rendererRef.current?.ensureRows(dims.rows);
-        virtualScrollerRef.current?.setViewportRows(dims.rows);
         dirtyFullRef.current = true;
         scheduleRenderRef.current?.();
         onResize?.(dims.cols, dims.rows);
@@ -508,11 +526,11 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             const fontFamily = TERMINAL_DEFAULTS.fontFamily;
             const dims = calculateTerminalDimensions(outerRef.current, fontFamily, fontSize, PADDING);
             if (dims.cols !== termRef.current.cols || dims.rows !== termRef.current.rows) {
+              virtualScrollerRef.current?.setViewportRows(dims.rows);
               termRef.current.resize(dims.cols, dims.rows);
               frontBufferRef.current?.resize(dims.cols, dims.rows);
               backBufferRef.current?.resize(dims.cols, dims.rows);
               rendererRef.current?.ensureRows(dims.rows);
-              virtualScrollerRef.current?.setViewportRows(dims.rows);
               dirtyFullRef.current = true;
               scheduleRenderRef.current?.();
               onResize?.(dims.cols, dims.rows);

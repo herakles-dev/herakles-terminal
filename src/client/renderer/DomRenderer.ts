@@ -98,6 +98,7 @@ export class DomRenderer {
     this.lineHeight = lineHeight;
     for (const row of this.rowElements) {
       row.style.height = `${lineHeight}px`;
+      row.style.lineHeight = `${lineHeight}px`;
     }
   }
 
@@ -155,7 +156,10 @@ export class DomRenderer {
     while (this.rowElements.length < rows) {
       const row = document.createElement('div');
       row.className = 'dom-term-row';
-      if (this.lineHeight > 0) row.style.height = `${this.lineHeight}px`;
+      if (this.lineHeight > 0) {
+        row.style.height = `${this.lineHeight}px`;
+        row.style.lineHeight = `${this.lineHeight}px`;
+      }
       this.container.appendChild(row);
       this.rowElements.push(row);
     }
@@ -184,7 +188,10 @@ export class DomRenderer {
 
   private renderRow(rowEl: HTMLDivElement, buffer: ScreenBuffer, y: number): void {
     let html = '';
-    let runStyleId = buffer.getStyleId(0, y);
+    // Initialize runStyleId to -1 (sentinel) so the first non-CONTINUATION cell
+    // seeds it. Pre-seeding from col 0 is wrong when col 0 is a CONTINUATION cell:
+    // the stale styleId causes incorrect span boundaries for subsequent characters.
+    let runStyleId = -1;
     let runChars = '';
 
     for (let x = 0; x < buffer.cols; x++) {
@@ -196,7 +203,10 @@ export class DomRenderer {
       const styleId = buffer.getStyleId(x, y);
       const char = buffer.charPool.get(charId);
 
-      if (styleId !== runStyleId) {
+      if (runStyleId === -1) {
+        // First non-CONTINUATION cell — seed the run
+        runStyleId = styleId;
+      } else if (styleId !== runStyleId) {
         html += this.makeSpan(runStyleId, runChars, buffer.stylePool);
         runStyleId = styleId;
         runChars = '';

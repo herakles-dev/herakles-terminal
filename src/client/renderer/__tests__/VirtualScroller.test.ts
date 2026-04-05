@@ -265,7 +265,7 @@ describe('VirtualScroller', () => {
       track(container);
       // Simulate 10 new lines pushed into buffer
       (term.buffer.active as { length: number }).length = 34;
-      scroller.onNewOutput(10);
+      scroller.onNewOutput();
       expect(scroller.isAtBottom()).toBe(true);
       const range = scroller.getViewportRange();
       expect(range.startLine).toBe(10); // 34 - 24
@@ -278,9 +278,9 @@ describe('VirtualScroller', () => {
       scroller.scrollBy(20); // scroll up 20 lines
       expect(scroller.isAtBottom()).toBe(false);
 
-      // 10 new lines added
+      // 10 new lines added — onNewOutput self-computes delta from previous totalLines
       (term.buffer.active as { length: number }).length = 110;
-      scroller.onNewOutput(10);
+      scroller.onNewOutput();
       expect(scroller.isAtBottom()).toBe(false);
       // scrollOffset should have grown to keep showing the same content
       // new scrollableLines = 110 - 24 = 86; offset should be min(86, 20+10) = 30

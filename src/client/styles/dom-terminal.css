@@ -32,7 +32,10 @@
 
 .dom-term-row {
   white-space: pre;
-  contain: content;
+  /* contain:content includes paint containment which clips at integer pixel
+     boundaries — at fractional DPR (1.25x, 1.5x) this creates sub-pixel gaps
+     between rows that look like dot artifacts. Use layout+style only. */
+  contain: layout style;
   overflow: hidden;
 }
 

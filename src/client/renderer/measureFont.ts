@@ -23,8 +23,12 @@ let measureContainer: HTMLElement | null = null;
 function getMeasureContainer(): HTMLElement {
   if (!measureContainer) {
     measureContainer = document.createElement('div');
+    // Match the rendering environment of .dom-term-viewport so that measured
+    // lineHeight matches actual rendered row height. Without -webkit-font-smoothing
+    // and text-rendering, the measurement span can report a lineHeight that differs
+    // by 1-2px from the actual row, causing aspect-ratio-dependent row gaps.
     measureContainer.style.cssText =
-      'position:fixed;visibility:hidden;top:-9999px;left:-9999px;pointer-events:none;contain:strict';
+      'position:fixed;visibility:hidden;top:-9999px;left:-9999px;pointer-events:none;contain:strict;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeSpeed';
     document.body.appendChild(measureContainer);
   }
   return measureContainer;

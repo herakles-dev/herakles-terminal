@@ -235,20 +235,25 @@ export class VirtualScroller {
    * Called on new output arrival (xterm onRender / onScroll).
    * If the terminal was at the bottom, keep it there as new lines push content up.
    * If the user has scrolled up, the scroll offset grows to track the same content.
+   *
+   * Self-computes the line delta from previous totalLines — callers no longer need
+   * to pass newLinesAdded (the parameter was always 0, breaking scroll-up tracking).
    */
-  onNewOutput(newLinesAdded: number): void {
+  onNewOutput(): void {
+    const prevTotal = this.totalLines;
     this.updateTotalLines();
+    const delta = this.totalLines - prevTotal;
 
     if (this._isAtBottom) {
       // Stay pinned to bottom
       this.scrollOffset = 0;
-    } else {
+    } else if (delta > 0) {
       // Keep showing the same content by scrolling up with the added lines
       const scrollableLines = Math.max(0, this.totalLines - this.viewportRows);
-      this.scrollOffset = Math.min(
-        scrollableLines,
-        this.scrollOffset + newLinesAdded
-      );
+      this.scrollOffset = Math.min(scrollableLines, this.scrollOffset + delta);
+    } else if (delta < 0) {
+      // Buffer shrank (e.g. term.clear()) — clamp offset to valid range
+      this.clampOffset();
     }
 
     this.updateScrollbar();
