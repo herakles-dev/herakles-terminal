@@ -32,9 +32,9 @@ interface FloatingInputProps {
 
 // Inline quick keys — all essential terminal operations in a scrollable row
 const INLINE_KEYS = [
-  { id: 'ctrl-c', label: '^C', value: '\x03', title: 'Interrupt', accent: true },
-  { id: 'ctrl-d', label: '^D', value: '\x04', title: 'EOF' },
-  { id: 'ctrl-z', label: '^Z', value: '\x1a', title: 'Suspend' },
+  { id: 'backspace', label: '\u2190', value: '\x7f', title: 'Backspace', accent: true },
+  { id: 'dash', label: '\u2013', value: '-', title: 'Dash' },
+  { id: 'caret', label: '^', value: '^', title: 'Caret' },
   { id: 'tab', label: 'Tab', value: '\t', title: 'Tab complete' },
   { id: 'esc', label: 'Esc', value: '\x1b', title: 'Escape' },
   { id: 'up', label: '\u2191', value: '\x1b[A', title: 'History up' },
@@ -88,7 +88,7 @@ const CLAUDE_RESERVED_KEY_IDS = new Set(['up', 'down', 'left', 'right']);
 
 // Quick keys that insert into the floating input field (typeable characters you compose
 // into commands) rather than sending directly to the terminal.
-const INSERT_INTO_INPUT_KEY_IDS = new Set(['slash', 'tilde']);
+const INSERT_INTO_INPUT_KEY_IDS = new Set(['slash', 'tilde', 'dash', 'caret']);
 
 export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>(
   ({ onInput, enabled, windowId, windowType }, ref) => {
@@ -310,6 +310,7 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
             return (
               <button
                 key={key.id}
+                onPointerDown={e => e.preventDefault()}
                 onClick={() => handleQuickKey(key.id, key.value)}
                 title={isReserved ? `${key.title} (Claude UI)` : key.title}
                 style={{
@@ -404,6 +405,7 @@ export const FloatingInput = forwardRef<FloatingInputHandle, FloatingInputProps>
 
           {/* Send button */}
           <button
+            onPointerDown={e => e.preventDefault()}
             onClick={() => {
               if (inputRef.current) {
                 const val = inputRef.current.value;
