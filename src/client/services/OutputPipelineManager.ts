@@ -49,7 +49,8 @@ const CRITICAL_THROTTLE_DELAY = 200;   // ~5fps
 
 // Post-resize suppression window: after resize-pending clears, apply aggressive
 // dot filtering for this duration to catch late-arriving tmux SIGWINCH artifacts.
-const POST_RESIZE_SUPPRESSION_MS = 100;
+// 500ms covers Android keyboard close animation (300-500ms) + network latency.
+const POST_RESIZE_SUPPRESSION_MS = 500;
 
 interface WindowOutputState {
   buffer: string;
@@ -142,12 +143,10 @@ export function filterOutputPreservingSpinners(data: string): string {
       const hasSyncEnd = part.includes('\x1b[?2026l');
       const syncPrefix = hasSyncBegin ? '\x1b[?2026h' : '';
       const syncSuffix = hasSyncEnd ? '\x1b[?2026l' : '';
-      // After cursor positioning, erase the line to clean up visual artifacts
-      if (i > 0 && CURSOR_POSITION_REGEX.test(parts[i - 1])) {
-        result.push(syncPrefix + '\x1b[K' + syncSuffix);
-      } else if (syncPrefix || syncSuffix) {
-        result.push(syncPrefix + syncSuffix);
-      }
+      // Always erase the full line when filtering dots — prevents stale dot
+      // content from remaining visible when Ink renders split across messages
+      // or cursor-positioned updates skip explicit clears.
+      result.push(syncPrefix + '\x1b[2K' + syncSuffix);
       continue;
     }
     result.push(part);
@@ -450,8 +449,14 @@ export class OutputPipelineManager {
     if (!pending && !state.resizePending) return;
     state.resizePending = pending;
 
+    if (pending) {
+      // Start suppression immediately when resize begins — catches dots that
+      // arrive via fast network before the resize ack comes back.
+      state.postResizeSuppressUntil = performance.now() + POST_RESIZE_SUPPRESSION_MS;
+    }
+
     if (!pending) {
-      // Start post-resize suppression window — aggressively filter dots for 100ms
+      // Extend suppression window when resize completes — covers late SIGWINCH artifacts
       state.postResizeSuppressUntil = performance.now() + POST_RESIZE_SUPPRESSION_MS;
 
       if (state.pendingResizeBuffer) {
