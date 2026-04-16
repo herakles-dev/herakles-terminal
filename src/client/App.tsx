@@ -32,10 +32,7 @@ import { ArtifactToolbarButton, FullscreenViewer } from './components/Canvas';
 import { TemplateToolbar } from './components/TemplateToolbar';
 import { WelcomePage } from './components/WelcomePage';
 import type { SessionTodos } from '@shared/todoProtocol';
-import type { MusicPlayerState, MusicDockState, StarredVideo } from '@shared/musicProtocol';
-import { DEFAULT_DOCK_STATE, getYouTubeThumbnail, extractVideoId } from '@shared/musicProtocol';
 import type { ContextUsage, ContextSyncMessage, ContextUpdateMessage } from '@shared/contextProtocol';
-import type { ArtifactMetadata } from '@shared/types';
 
 import { useWebSocket, ConnectionState } from './hooks/useWebSocket';
 import { useKeyboardHeight } from './hooks/useKeyboardHeight';
@@ -46,6 +43,7 @@ import { useClipboardUpload } from './hooks/useClipboardUpload';
 import { useHealthActions } from './hooks/useHealthActions';
 import { useTeamCockpit } from './hooks/useTeamCockpit';
 import { useStopProtocol } from './hooks/useStopProtocol';
+import { useMusicManager } from './hooks/useMusicManager';
 import { TeamBar } from './components/TeamBar/TeamBar';
 import { RizStopPanel, StopProtocolOverlay } from './components/StopProtocol';
 import { STOP_PROTOCOL_USER } from '@shared/stopProtocol';
@@ -98,10 +96,10 @@ function calculateTerminalGridLayouts(count: number): WindowLayout[] {
     ],
 
     [
-      { x: 0, y: 0, width: MAIN_WIDTH, height: 1 },
-      { x: RIGHT_START, y: 0, width: RIGHT_WIDTH, height: 0.5 },
-      { x: RIGHT_START, y: 0.5, width: HALF_RIGHT, height: 0.5 },
-      { x: RIGHT_START + HALF_RIGHT, y: 0.5, width: HALF_RIGHT, height: 0.5 },
+      { x: 0, y: 0, width: 0.5, height: 0.5 },
+      { x: 0.5, y: 0, width: 0.5, height: 0.5 },
+      { x: 0, y: 0.5, width: 0.5, height: 0.5 },
+      { x: 0.5, y: 0.5, width: 0.5, height: 0.5 },
     ],
 
     [
@@ -169,7 +167,6 @@ function calculateWindowLayouts(windows: Array<{ type?: 'terminal' | 'media' | '
 export default function App() {
   const [showWelcome, setShowWelcome] = useState(true);
   const [currentUser, setCurrentUser] = useState<{ username: string; groups: string[] } | null>(null);
-  const [_userChecked, setUserChecked] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelExpanded, setSidePanelExpanded] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>();
@@ -228,38 +225,10 @@ export default function App() {
   const todoHasActive = useMemo(() => {
     return todoSessions.some(s => s.todos.some(t => t.status === 'in_progress'));
   }, [todoSessions]);
-  const [musicPlayerVisible, setMusicPlayerVisible] = useState(false);
-  const [musicPlayerState, setMusicPlayerState] = useState<Partial<MusicPlayerState>>({});
-  const [_musicDockState, setMusicDockState] = useState<MusicDockState>(DEFAULT_DOCK_STATE);
-  const [starredVideos, setStarredVideos] = useState<StarredVideo[]>([]);
-  const [showPlaylist, setShowPlaylist] = useState(false);
   const [contextUsage, setContextUsage] = useState<Map<string, ContextUsage>>(new Map());
   const [todoPanelWidth, setTodoPanelWidth] = useState(280);
-  const [_artifactHistory, setArtifactHistory] = useState<ArtifactMetadata[]>([]);
   const [canvasViewerOpen, setCanvasViewerOpen] = useState(false);
   const [activeArtifactIndex, setActiveArtifactIndex] = useState(0);
-  const [youtubeButtonPos, setYoutubeButtonPos] = useState({ x: 16, y: window.innerHeight - 80 });
-  const [isDraggingYoutubeBtn, setIsDraggingYoutubeBtn] = useState(false);
-  const youtubeDragRef = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number }>();
-  const csrfTokenRef = useRef<string | null>(null);
-
-  // Memoized callback to prevent infinite render loop - must NOT change reference
-  const handleMusicPlayerStateChange = useCallback((state: MusicPlayerState) => {
-    // Only sync playback state, NOT mode - parent controls mode entirely
-    setMusicPlayerState(prev => ({
-      ...prev,
-      videoId: state.videoId,
-      videoTitle: state.videoTitle,
-      thumbnailUrl: state.thumbnailUrl,
-      isPlaying: state.isPlaying,
-      volume: state.volume,
-      currentTime: state.currentTime,
-      duration: state.duration,
-      isMuted: state.isMuted,
-      position: state.position,
-      // mode is controlled by parent via musicPlayerVisible, don't sync back
-    }));
-  }, []); // Empty deps - setMusicPlayerState is stable
 
   // Check user identity on mount — skip welcome page for stop protocol user
   useEffect(() => {
@@ -272,112 +241,24 @@ export default function App() {
             setShowWelcome(false); // Skip welcome for riz
           }
         }
-        setUserChecked(true);
       })
-      .catch(() => setUserChecked(true));
+      .catch(() => {});
   }, []);
 
-  // Fetch CSRF token on mount
-  useEffect(() => {
-    fetch(apiUrl('/csrf-token'), { credentials: 'include' })
-      .then(res => res.json())
-      .then(data => {
-        if (data.data?.token) {
-          csrfTokenRef.current = data.data.token;
-          console.log('[MusicSync] CSRF token obtained');
-        }
-      })
-      .catch(err => console.error('[MusicSync] Failed to fetch CSRF token:', err));
+  // Music manager hook — handles all music state, CSRF, starred videos, YouTube button.
+  // Ref bridge: sendMessage is defined later in this render function (line ~870), but the
+  // ref is set during render before any useEffect fires, so useMusicManager's effects
+  // always see a valid sendMessage. See sendMessageRef_stable.current = sendMessage below.
+  const sendMessageRef_stable = useRef<((msg: object) => void) | null>(null);
+  const musicMessageRef = useRef<((msg: any) => void) | null>(null);
+  const sendMessageForMusic = useCallback((msg: object) => {
+    sendMessageRef_stable.current?.(msg);
   }, []);
-
-  // Fetch starred videos on mount
-  useEffect(() => {
-    fetch(apiUrl('/music/starred'), { credentials: 'include' })
-      .then(res => res.json())
-      .then(data => {
-        if (data.data) {
-          setStarredVideos(data.data);
-        }
-      })
-      .catch(err => console.error('Failed to fetch starred videos:', err));
-  }, []);
-
-  // Fetch persisted music player state on mount (resume functionality)
-  useEffect(() => {
-    console.log('[MusicResume] Fetching saved state...');
-    fetch(apiUrl('/music/state'), { credentials: 'include' })
-      .then(res => res.json())
-      .then(data => {
-        console.log('[MusicResume] Got response:', JSON.stringify(data));
-        if (data.data?.videoId) {
-          console.log('[MusicResume] Restoring video:', data.data.videoId, 'at time:', data.data.currentTime);
-          // Restore persisted state
-          setMusicPlayerState({
-            videoId: data.data.videoId,
-            videoTitle: data.data.videoTitle,
-            thumbnailUrl: data.data.thumbnailUrl,
-            volume: data.data.volume,
-            currentTime: data.data.currentTime,
-            isMuted: data.data.isMuted,
-            position: data.data.position,
-            isPlaying: false, // Don't auto-play, let user start
-          });
-          // Show player if video was previously loaded
-          if (data.data.mode !== 'hidden') {
-            console.log('[MusicResume] Setting player visible, mode was:', data.data.mode);
-            setMusicPlayerVisible(true);
-          }
-        } else {
-          console.log('[MusicResume] No videoId found in response');
-        }
-      })
-      .catch(err => console.error('[MusicResume] Failed to fetch:', err));
-  }, []);
-
-  // Debounced sync for music player state persistence
-  const musicSyncTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const handleMusicPlayerSync = useCallback((state: Partial<MusicPlayerState>) => {
-    // Immediate sync for important changes
-    const immediate = state.videoId !== undefined || state.mode !== undefined;
-    console.log('[MusicSync] Syncing state:', JSON.stringify(state), 'immediate:', immediate);
-
-    // Build headers with CSRF token
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (csrfTokenRef.current) {
-      headers['x-csrf-token'] = csrfTokenRef.current;
-    }
-
-    if (immediate) {
-      fetch(apiUrl('/music/state'), {
-        method: 'PUT',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify(state),
-      })
-        .then(res => res.json())
-        .then(data => console.log('[MusicSync] Save response:', JSON.stringify(data)))
-        .catch(err => console.error('[MusicSync] Failed to sync:', err));
-    } else {
-      // Debounce time-based updates (currentTime, volume)
-      clearTimeout(musicSyncTimeoutRef.current);
-      musicSyncTimeoutRef.current = setTimeout(() => {
-        // Re-build headers in timeout (token might have updated)
-        const timeoutHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (csrfTokenRef.current) {
-          timeoutHeaders['x-csrf-token'] = csrfTokenRef.current;
-        }
-        fetch(apiUrl('/music/state'), {
-          method: 'PUT',
-          headers: timeoutHeaders,
-          credentials: 'include',
-          body: JSON.stringify(state),
-        }).catch(err => console.error('Failed to sync music state:', err));
-      }, 2000);
-    }
-  }, []);
+  const music = useMusicManager({ sendMessage: sendMessageForMusic, sessionId, windows });
+  // Keep music message handler ref current for handleMessage's [] deps closure
+  musicMessageRef.current = music.handleMusicMessage;
 
   const terminalRefs = useRef<Map<string, TerminalCoreHandle>>(new Map());
-  const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
   const sendMessageRef = useRef<((msg: object) => void) | null>(null);
   const teamCockpitRef = useRef<((msg: any) => void) | null>(null);
   const stopProtocolRef = useRef<((msg: any) => void) | null>(null);
@@ -387,6 +268,12 @@ export default function App() {
   const outputPipelineRef = useRef<OutputPipelineManager | null>(null);
   const healthMonitorRef = useRef<WebGLHealthMonitor | null>(null);
   const pendingRestoreRef = useRef<Map<string, string>>(new Map());
+  const restoreSafetyTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // R-2: Per-window restore generation counter. The RAF closure captures its generation at
+  // queue time and only calls setRestoreInProgress(false) if the generation still matches —
+  // prevents a zombie RAF (queued pre-disconnect) from clearing a NEW restore started after
+  // reconnect. Incremented each time we enter restore mode for a window.
+  const restoreGenerationRef = useRef<Map<string, number>>(new Map());
   const selectionRefs = useRef<Map<string, string>>(new Map()); // Track selection per window for WebGL
   const selectionCleanupTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map()); // FIX F: Debounced cleanup
   const restoreNeededAfterRecoveryRef = useRef<Set<string>>(new Set()); // Windows that need restore after WebGL recovery
@@ -405,6 +292,7 @@ export default function App() {
   // buffered instead of being written to xterm where it creates dot artifacts
   // when the terminal reflows to a smaller size.
   resizeStartHandlerRef.current = () => {
+    if (USE_DOM_RENDERER) return; // DOM renderer handles resize via its own ResizeObserver
     if (USE_GRID_LAYOUT) return; // v2 handles this via onResizePending in performFit
     if (terminalRefs.current.size === 0) return; // No terminals mounted yet
     for (const windowId of terminalRefs.current.keys()) {
@@ -443,11 +331,6 @@ export default function App() {
     }
     terminalRefs.current.delete(windowId);
     outputPipelineRef.current?.clear(windowId);
-    const observer = resizeObserversRef.current.get(windowId);
-    if (observer) {
-      observer.disconnect();
-      resizeObserversRef.current.delete(windowId);
-    }
 
     // Clean up fit timeout to prevent memory leak
     const fitTimeout = fitTimeoutRef.current.get(windowId);
@@ -455,6 +338,16 @@ export default function App() {
       clearTimeout(fitTimeout);
       fitTimeoutRef.current.delete(windowId);
     }
+    // Clean up restore safety timer
+    const restoreTimer = restoreSafetyTimerRef.current.get(windowId);
+    if (restoreTimer) {
+      clearTimeout(restoreTimer);
+      restoreSafetyTimerRef.current.delete(windowId);
+    }
+    // Clean up resize safety gate
+    const resizeGate = resizeGateRef.current.get(windowId);
+    if (resizeGate?.safetyTimer) clearTimeout(resizeGate.safetyTimer);
+    resizeGateRef.current.delete(windowId);
 
     // Clean up context menu listener to prevent event listener leak
     const contextHandler = contextMenuHandlersRef.current.get(windowId);
@@ -596,8 +489,18 @@ export default function App() {
         if (terminal && msg.data) {
           // Step 2: Filter thinking output before restore write (defense-in-depth)
           const filteredData = filterOutputPreservingSpinners(msg.data);
+          // R-2: Increment generation counter for this window so any zombie RAF
+          // (queued before a disconnect) sees a stale generation and skips the
+          // setRestoreInProgress(false) call, preventing it from prematurely clearing
+          // a NEW restore started after reconnect.
+          const prevGen = restoreGenerationRef.current.get(msg.windowId) ?? 0;
+          const thisGen = prevGen + 1;
+          restoreGenerationRef.current.set(msg.windowId, thisGen);
           // Single RAF (reduced from 3 nested RAFs)
           requestAnimationFrame(() => {
+            // R-2: Only proceed if this RAF's generation still matches — otherwise
+            // a disconnect + new restore has superseded us; skip the flag clear.
+            if (restoreGenerationRef.current.get(msg.windowId) !== thisGen) return;
             // FIX A: Use ANSI clear screen + cursor home instead of terminal.reset()
             // reset() destroys scrollback buffer; ANSI \x1b[2J\x1b[H clears viewport only
             terminal.write('\x1b[2J\x1b[H' + filteredData, () => {
@@ -621,7 +524,10 @@ export default function App() {
 
           // Safety timeout - exit restore mode if terminal never initializes
           // Prevents indefinite output blocking if terminal fails to mount
-          setTimeout(() => {
+          const prevTimer = restoreSafetyTimerRef.current.get(msg.windowId);
+          if (prevTimer) clearTimeout(prevTimer);
+          restoreSafetyTimerRef.current.set(msg.windowId, setTimeout(() => {
+            restoreSafetyTimerRef.current.delete(msg.windowId);
             if (pendingRestoreRef.current.has(msg.windowId)) {
               // FIX WG-3: Don't clear if recovery is in progress
               // Recovery might complete and restore the content
@@ -634,7 +540,7 @@ export default function App() {
                 console.info(`[${msg.windowId}] Restore timeout but recovery in progress - keeping buffer`);
               }
             }
-          }, 5000);
+          }, 5000));
         } else {
           // No data to restore - exit restore mode immediately
           outputPipelineRef.current?.setRestoreInProgress(msg.windowId, false);
@@ -646,11 +552,25 @@ export default function App() {
       case 'window:resized': {
         const { windowId, cols, rows } = msg;
         if (!USE_GRID_LAYOUT) {
-          resizeCoordinatorRef.current.confirmResize(windowId, cols, rows);
+          if (!USE_DOM_RENDERER) {
+            resizeCoordinatorRef.current.confirmResize(windowId, cols, rows);
+          }
           // Clear early-resize safety timeout — server ack arrived successfully
           if (earlyResizeSafetyRef.current) {
             clearTimeout(earlyResizeSafetyRef.current);
             earlyResizeSafetyRef.current = undefined;
+          }
+          // RC-3 (v1 path): Ignore stale acks from superseded resizes
+          const ackSeq = (msg as Record<string, unknown>).seq as number | undefined;
+          const latestSeq = resizeSeqRef.current.get(windowId);
+          if (ackSeq !== undefined && latestSeq !== undefined && ackSeq < latestSeq) {
+            break; // Stale ack — a newer resize is in flight
+          }
+          // Clear DOM renderer safety timer — server ack arrived successfully
+          const gate = resizeGateRef.current.get(windowId);
+          if (gate?.safetyTimer) {
+            clearTimeout(gate.safetyTimer);
+            resizeGateRef.current.delete(windowId);
           }
           // RC-1: Delay clearing resize-pending by 80ms to match server drain delay.
           // Lets tmux SIGWINCH re-render output arrive and get filtered before buffer release.
@@ -733,26 +653,17 @@ export default function App() {
         toast.success(`File ready: ${msg.file.filename}`);
         break;
 
-      case 'todo:allSessions':
-        console.log('[App] Received todo:allSessions:', {
-          sessionCount: msg.sessions?.length || 0,
-          totalTodos: msg.sessions?.reduce((sum: number, s: SessionTodos) => sum + s.todos.length, 0) || 0,
-          sessions: msg.sessions,
-        });
+      case 'todo:allSessions': {
         // Filter to only show sessions updated in the last hour (3600000 ms)
         const now = Date.now();
         const oneHourAgo = now - 3600000;
         const recentSessions = (msg.sessions || []).filter(
           (session: SessionTodos) => session.lastModified > oneHourAgo
         );
-        console.log('[App] Filtered to recent sessions:', {
-          total: msg.sessions?.length || 0,
-          recent: recentSessions.length,
-          filtered: (msg.sessions?.length || 0) - recentSessions.length,
-        });
         setTodoSessions(recentSessions);
         setTodosLoading(false);
         break;
+      }
 
       case 'context:sync':
       case 'context:update': {
@@ -774,15 +685,11 @@ export default function App() {
         break;
 
       case 'music:dock:restore':
-        if (msg.state) {
-          setMusicDockState(msg.state);
-        }
+        musicMessageRef.current?.(msg);
         break;
 
       case 'artifact:history':
-        if (msg.artifacts) {
-          setArtifactHistory(msg.artifacts);
-        }
+        // History received but not currently displayed — no-op
         break;
 
       case 'team:sync':
@@ -830,6 +737,15 @@ export default function App() {
         }
       }
       pendingRestoreRef.current.clear();
+
+      // R-2: Advance all restore generations on disconnect so any in-flight RAFs
+      // (queued before the drop) see a stale generation and skip their
+      // setRestoreInProgress(false) calls, preventing them from clearing a NEW restore
+      // started after reconnect.
+      for (const w of windowsRef.current) {
+        const gen = restoreGenerationRef.current.get(w.id) ?? 0;
+        restoreGenerationRef.current.set(w.id, gen + 1);
+      }
 
       // H5: Clear resize gate refs — prevents stuck gates after fast reconnect.
       // Any in-flight gates will never receive their server acks on the old connection.
@@ -931,7 +847,6 @@ export default function App() {
     if (!sendMessageRef.current || connectionState !== 'connected') return;
 
     if (!todoSubscribedRef.current) {
-      console.log('[App] Subscribing to todo updates');
       setTodosLoading(true);
       sendMessageRef.current({ type: 'todo:subscribe', windowId: 'global' });
       todoSubscribedRef.current = true;
@@ -948,11 +863,12 @@ export default function App() {
     }
   }, [connectionState]);
 
-  // Create health actions hook for proactive health management
+  // Create health actions hook for proactive health management.
+  // Pass refs directly — the hook reads .current at call time, not capture time.
   const { applyHealthActions } = useHealthActions({
-    healthMonitor: healthMonitorRef.current,
-    terminalRefs: terminalRefs.current,
-    outputPipeline: outputPipelineRef.current,
+    healthMonitor: healthMonitorRef,
+    terminalRefs,
+    outputPipelineRef,
     toast,
   });
 
@@ -964,28 +880,24 @@ export default function App() {
       }
     };
 
-    // Create health monitor with metrics callback
-    const healthMonitor = new WebGLHealthMonitor((metrics) => {
-      // Apply proactive health actions (Phase 2: Complete)
-      applyHealthActions(metrics);
+    // WebGL health monitor only needed for canvas renderer — DOM renderer has no WebGL
+    let healthMonitor: WebGLHealthMonitor | null = null;
+    if (!USE_DOM_RENDERER) {
+      healthMonitor = new WebGLHealthMonitor((metrics) => {
+        applyHealthActions(metrics);
+        if (metrics.recommendation !== 'normal') {
+          console.warn('[WebGLHealth] Recommendation:', metrics.recommendation, 'Score:', metrics.healthScore);
+        }
+      });
+      healthMonitorRef.current = healthMonitor;
+      healthMonitor.start();
+      exposeMetricsToWindow(healthMonitor);
+    }
 
-      // Log metrics to console for debugging
-      if (metrics.recommendation !== 'normal') {
-        console.warn('[WebGLHealth] Recommendation:', metrics.recommendation, 'Score:', metrics.healthScore);
-      }
-    });
-    healthMonitorRef.current = healthMonitor;
-
-    // Start periodic metrics reporting
-    healthMonitor.start();
-
-    // Expose to window for debugging (Phase 1 validation)
-    exposeMetricsToWindow(healthMonitor);
-
-    // Create output pipeline with health monitor
+    // Create output pipeline — health monitor is null for DOM renderer (no WebGL to monitor)
     const mobileDevice = /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
     outputPipelineRef.current = new OutputPipelineManager(writeToTerminal, {
-      healthMonitor,
+      healthMonitor: healthMonitor ?? undefined,
       isMobile: mobileDevice,
     });
 
@@ -1000,58 +912,19 @@ export default function App() {
     });
 
     return () => {
-      healthMonitor.stop();
+      healthMonitor?.stop();
       healthMonitorRef.current = null;
       outputPipelineRef.current?.clearAll();
       outputPipelineRef.current = null;
     };
   }, [applyHealthActions]);
 
-  // FIX G: Clean up music sync timeout on unmount to prevent leaked fetch after disposal
-  useEffect(() => {
-    return () => {
-      if (musicSyncTimeoutRef.current) clearTimeout(musicSyncTimeoutRef.current);
-    };
-  }, []);
-
   const sendMessage = useCallback((message: object) => {
     sendMessageRef.current?.(message);
   }, []);
 
-  const handleYoutubeButtonDragStart = useCallback((e: React.MouseEvent) => {
-    setIsDraggingYoutubeBtn(true);
-    youtubeDragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      startPosX: youtubeButtonPos.x,
-      startPosY: youtubeButtonPos.y,
-    };
-  }, [youtubeButtonPos]);
-
-  useEffect(() => {
-    if (!isDraggingYoutubeBtn) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!youtubeDragRef.current) return;
-      const deltaX = e.clientX - youtubeDragRef.current.startX;
-      const deltaY = e.clientY - youtubeDragRef.current.startY;
-      const newX = Math.max(0, Math.min(window.innerWidth - 48, youtubeDragRef.current.startPosX + deltaX));
-      const newY = Math.max(0, Math.min(window.innerHeight - 48, youtubeDragRef.current.startPosY + deltaY));
-      setYoutubeButtonPos({ x: newX, y: newY });
-    };
-
-    const handleMouseUp = () => {
-      setIsDraggingYoutubeBtn(false);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDraggingYoutubeBtn]);
+  // Wire stable ref for music manager's sendMessage
+  sendMessageRef_stable.current = sendMessage;
 
   const handleWindowFocus = useCallback((id: string) => {
     setActiveWindowId(id);
@@ -1190,12 +1063,26 @@ export default function App() {
           }
         }, 200);
         resizeGateRef.current.set(windowId, { serverAcked: false, canvasVerified: false, safetyTimer });
+      } else {
+        // DOM renderer safety: if server ack is lost (network drop, crash),
+        // release the buffer after 2s to prevent permanent output suppression.
+        // Normal ack path (80ms delay) clears resizePending much sooner.
+        const oldGate = resizeGateRef.current.get(windowId);
+        if (oldGate?.safetyTimer) clearTimeout(oldGate.safetyTimer);
+        const safetyTimer = setTimeout(() => {
+          if (outputPipelineRef.current?.isResizePending(windowId)) {
+            outputPipelineRef.current.setResizePending(windowId, false);
+          }
+          resizeGateRef.current.delete(windowId);
+        }, 2000);
+        resizeGateRef.current.set(windowId, { serverAcked: false, canvasVerified: true, safetyTimer });
       }
       sendMessage({ type: 'window:resize', windowId, cols, rows, seq });
     };
 
     // WebGL recovery coordination - notify output pipeline to pause
     const handleRecoveryStart = (terminalId: string) => {
+      if (USE_DOM_RENDERER) return; // I-07: DOM renderer has no WebGL recovery; avoid silent output drop
       outputPipelineRef.current?.setRecoveryInProgress(terminalId, true);
 
       // FIX RS-2: Capture terminal size at start of recovery
@@ -1211,6 +1098,7 @@ export default function App() {
 
     // WebGL recovery coordination - resume output pipeline and re-request restore if needed
     const handleRecoveryEnd = (terminalId: string, success: boolean) => {
+      if (USE_DOM_RENDERER) return; // I-07: DOM renderer has no WebGL recovery; avoid silent output drop
       outputPipelineRef.current?.setRecoveryInProgress(terminalId, false);
 
       // v2 grid: replay any resize that was deferred during recovery
@@ -1274,7 +1162,8 @@ export default function App() {
       sendMessage({ type: 'context:subscribe', windowId });
 
       // v2: Register with grid resize observer (retry up to 3 times if DOM not ready)
-      if (USE_GRID_LAYOUT) {
+      // DOM renderer passes null for fitAddon — guard before accessing the USE_GRID_LAYOUT block.
+      if (USE_GRID_LAYOUT && fitAddon) {
         const registerGridPane = (attempt: number) => {
           const paneEl = document.querySelector(`[data-grid-pane-id="${windowId}"]`) as HTMLElement;
           if (!paneEl) {
@@ -1485,175 +1374,17 @@ export default function App() {
   }, [fontSize, isMobile, sendMessage, toast]);
 
   // Music player control callbacks (shared between floating and window modes)
-  const handleTogglePlay = useCallback(() => {
-    setMusicPlayerState(prev => ({ ...prev, isPlaying: !prev.isPlaying }));
-  }, []);
-
-  const handleVolumeChange = useCallback((volume: number) => {
-    setMusicPlayerState(prev => ({ ...prev, volume }));
-  }, []);
-
-  const handleToggleMute = useCallback(() => {
-    setMusicPlayerState(prev => ({ ...prev, isMuted: !prev.isMuted }));
-  }, []);
-
-  const handleSeek = useCallback((time: number) => {
-    setMusicPlayerState(prev => ({ ...prev, currentTime: time }));
-  }, []);
-
-  const handleLoadVideo = useCallback((url: string) => {
-    const videoId = extractVideoId(url);
-    if (videoId) {
-      setMusicPlayerState(prev => ({
-        ...prev,
-        videoId,
-        thumbnailUrl: getYouTubeThumbnail(videoId, 'medium'),
-        isPlaying: false,
-      }));
-    }
-  }, []);
-
-  const handlePlaybackUpdate = useCallback((currentTime: number, duration: number) => {
-    setMusicPlayerState(prev => ({ ...prev, currentTime, duration }));
-  }, []);
-
-  const handleVideoTitleChange = useCallback((title: string) => {
-    setMusicPlayerState(prev => ({ ...prev, videoTitle: title }));
-  }, []);
-
-  const handleToggleStar = useCallback(async () => {
-    if (!musicPlayerState.videoId) return;
-
-    const video = {
-      videoId: musicPlayerState.videoId,
-      videoTitle: musicPlayerState.videoTitle || 'Unknown',
-      thumbnailUrl: musicPlayerState.thumbnailUrl || getYouTubeThumbnail(musicPlayerState.videoId, 'medium'),
-    };
-
-    const isStarred = starredVideos.some(v => v.videoId === musicPlayerState.videoId);
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (csrfTokenRef.current) {
-      headers['x-csrf-token'] = csrfTokenRef.current;
-    }
-
-    if (isStarred) {
-      setStarredVideos(prev => prev.filter(v => v.videoId !== musicPlayerState.videoId));
-      try {
-        const res = await fetch(apiUrl(`/music/starred/${musicPlayerState.videoId}`), {
-          method: 'DELETE',
-          headers,
-          credentials: 'include',
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setStarredVideos(data.data);
-        }
-      } catch (err) {
-        console.error('Failed to unstar video:', err);
-      }
-    } else {
-      setStarredVideos(prev => [{ ...video, starredAt: Date.now() }, ...prev]);
-      try {
-        const res = await fetch(apiUrl('/music/starred'), {
-          method: 'POST',
-          headers,
-          credentials: 'include',
-          body: JSON.stringify(video),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setStarredVideos(data.data);
-        }
-      } catch (err) {
-        console.error('Failed to star video:', err);
-        setStarredVideos(prev => prev.filter(v => v.videoId !== musicPlayerState.videoId));
-      }
-    }
-  }, [musicPlayerState.videoId, musicPlayerState.videoTitle, musicPlayerState.thumbnailUrl, starredVideos]);
-
-  const handleRemoveStarred = useCallback(async (videoId: string) => {
-    setStarredVideos(prev => prev.filter(v => v.videoId !== videoId));
-    try {
-      const headers: Record<string, string> = {};
-      if (csrfTokenRef.current) {
-        headers['x-csrf-token'] = csrfTokenRef.current;
-      }
-      const res = await fetch(apiUrl(`/music/starred/${videoId}`), {
-        method: 'DELETE',
-        headers,
-        credentials: 'include',
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setStarredVideos(data.data);
-      }
-    } catch (err) {
-      console.error('Failed to remove starred video:', err);
-    }
-  }, []);
-
-  const handlePlayFromPlaylist = useCallback((video: StarredVideo) => {
-    setMusicPlayerState(prev => ({
-      ...prev,
-      videoId: video.videoId,
-      videoTitle: video.videoTitle,
-      thumbnailUrl: video.thumbnailUrl,
-      isPlaying: true,
-    }));
-  }, []);
-
-  const isCurrentVideoStarred = musicPlayerState.videoId
-    ? starredVideos.some(v => v.videoId === musicPlayerState.videoId)
-    : false;
-
-  // Refs for music state to avoid renderWindow instability (RC-1 fix)
-  // musicPlayerState changes ~4x/sec during playback; using refs prevents
-  // SplitView re-renders that cause terminal pulsing
-  const musicPlayerStateRef = useRef(musicPlayerState);
-  musicPlayerStateRef.current = musicPlayerState;
-  const starredVideosRef = useRef(starredVideos);
-  starredVideosRef.current = starredVideos;
-  const isCurrentVideoStarredRef = useRef(isCurrentVideoStarred);
-  isCurrentVideoStarredRef.current = isCurrentVideoStarred;
-  const showPlaylistRef = useRef(showPlaylist);
-  showPlaylistRef.current = showPlaylist;
-
-  // Check if a media window already exists
-  // Mode toggle handlers
-  const handleDockToWindow = useCallback(() => {
-    if (!sessionId) return;
-
-    // Don't create multiple media windows
-    const existingMediaWindow = windows.find(w => w.type === 'media');
-    if (existingMediaWindow) {
-      // Focus the existing media window instead
-      sendMessage({ type: 'window:focus', windowId: existingMediaWindow.id });
-      setMusicPlayerVisible(false);
-      return;
-    }
-
-    // Create media window
-    sendMessage({
-      type: 'window:create',
-      sessionId,
-      windowType: 'media',
-    });
-
-    // Hide floating player
-    setMusicPlayerVisible(false);
-
-    // State transfers automatically via shared musicPlayerState
-  }, [sessionId, sendMessage, windows]);
-
-  const handleUndockToFloat = useCallback((windowId: string) => {
-    // Close media window
-    sendMessage({ type: 'window:close', windowId });
-
-    // Show floating player
-    setMusicPlayerVisible(true);
-
-    // State persists via musicPlayerState
-  }, [sendMessage]);
+  // Destructured from useMusicManager for use in renderWindow and JSX
+  const {
+    musicPlayerVisible, setMusicPlayerVisible, musicPlayerState, setMusicPlayerState,
+    setShowPlaylist, youtubeButtonPos,
+    handleMusicPlayerStateChange, handleMusicPlayerSync,
+    handleTogglePlay, handleVolumeChange, handleToggleMute, handleSeek,
+    handleLoadVideo, handlePlaybackUpdate, handleVideoTitleChange,
+    handleToggleStar, handleRemoveStarred, handlePlayFromPlaylist,
+    handleDockToWindow, handleUndockToFloat, handleYoutubeButtonDragStart,
+    musicPlayerStateRef, starredVideosRef, isCurrentVideoStarredRef, showPlaylistRef,
+  } = music;
 
   // Dispatcher function that routes rendering based on window type
   // RC-1 fix: Uses refs for music state so this callback stays stable during
@@ -1685,8 +1416,7 @@ export default function App() {
             onLoadVideo={handleLoadVideo}
             onToggleMode={() => handleUndockToFloat(windowId)}
             onMinimize={() => {
-              // Minimize via SplitView (not implemented yet)
-              console.log('Minimize window (SplitView feature)');
+              // Minimize via SplitView — not yet implemented
             }}
             onClose={() => handleUndockToFloat(windowId)}
             onPlaybackUpdate={handlePlaybackUpdate}
@@ -1721,6 +1451,7 @@ export default function App() {
     handlePlayFromPlaylist,
     handleRemoveStarred,
     handleUndockToFloat,
+    setShowPlaylist,
   ]);
 
   const handleQuickKey = useCallback((value: string) => {
@@ -1730,7 +1461,7 @@ export default function App() {
   }, [activeWindowId, sendMessage]);
 
   const handleClearLine = useCallback(() => {
-    if (activeWindowId && sendMessage) {
+    if (activeWindowId) {
       sendMessage({ type: 'input', windowId: activeWindowId, data: '\x15' });
     }
   }, [activeWindowId, sendMessage]);
@@ -2244,6 +1975,7 @@ export default function App() {
             onWindowRename={handleWindowRename}
             renderWindow={renderWindow}
             sidePanelOpen={sidePanelOpen}
+            sidePanelExpanded={sidePanelExpanded}
             minimapVisible={minimapVisible}
             leftOffset={isMobile ? 0 : (todoPanelExpanded ? todoPanelWidth : 48)}
             contextUsage={contextUsage}

@@ -11,6 +11,7 @@ import { WebSocketRateLimiter } from '../middleware/rateLimit.js';
 import { config } from '../config.js';
 import { validateClientMessage, ValidatedClientMessage } from './messageSchema.js';
 import type { ServerMessage } from '../../shared/types.js';
+import { MAX_MESSAGE_SIZE, RESIZE_CONSTANTS } from '../../shared/constants.js';
 import { todoManager } from '../todo/TodoManager.js';
 import { teamManager } from '../team/TeamManager.js';
 import { stopProtocolManager } from '../stop/StopProtocolManager.js';
@@ -38,6 +39,8 @@ interface Connection {
 interface WindowListenerState {
   registered: boolean;
   listenerCount: number;
+  /** R-1: Set to true before pty.kill so any post-kill onData events are discarded. */
+  disposed: boolean;
 }
 
 interface ConnectionMeta {
@@ -262,11 +265,11 @@ export class ConnectionManager {
     ws.on('message', (data) => {
       try {
         const messageSize = Buffer.isBuffer(data) ? data.length : data.toString().length;
-        if (messageSize > 100000) {
+        if (messageSize > MAX_MESSAGE_SIZE) {
           this.send(ws, {
             type: 'error',
             code: 'MESSAGE_TOO_LARGE',
-            message: 'Message exceeds 100KB limit',
+            message: `Message exceeds ${Math.round(MAX_MESSAGE_SIZE / 1000)}KB limit`,
           });
           return;
         }
@@ -336,48 +339,46 @@ export class ConnectionManager {
         break;
 
       case 'session:create':
-        this.handleSessionCreate(connection, (message as any).name);
+        this.handleSessionCreate(connection, message.name);
         break;
 
       case 'window:create':
-        this.handleWindowCreate(connection, (message as any).sessionId, (message as any).windowType);
+        this.handleWindowCreate(connection, message.sessionId, message.windowType);
         break;
 
       case 'window:close':
-        this.handleWindowClose(connection, (message as any).windowId);
+        this.handleWindowClose(connection, message.windowId);
         break;
 
       case 'window:focus':
-        this.handleWindowFocus(connection, (message as any).windowId);
+        this.handleWindowFocus(connection, message.windowId);
         break;
 
       case 'window:send':
-        this.handleWindowSend(connection, (message as any).windowId, (message as any).data);
+        this.handleWindowSend(connection, message.windowId, message.data);
         break;
 
       case 'window:resize':
-        this.handleWindowResize(connection, (message as any).windowId, (message as any).cols, (message as any).rows, (message as any).seq);
+        this.handleWindowResize(connection, message.windowId, message.cols, message.rows, message.seq);
         break;
 
       case 'window:layout':
-        this.handleWindowLayout(connection, message as any);
+        this.handleWindowLayout(connection, message);
         break;
 
       case 'window:subscribe':
         this.handleWindowSubscribe(
           connection,
-          (message as any).windowId,
-          (message as any).cols,
-          (message as any).rows
+          message.windowId
         );
         break;
 
       case 'window:rename':
-        this.handleWindowRename(connection, (message as any).windowId, (message as any).name);
+        this.handleWindowRename(connection, message.windowId, message.name);
         break;
 
       case 'input':
-        this.handleInput(connection, (message as any).windowId, (message as any).data);
+        this.handleInput(connection, message.windowId, message.data);
         break;
 
       case 'ping':
@@ -390,27 +391,29 @@ export class ConnectionManager {
         break;
 
       case 'todo:subscribe':
-        this.handleTodoSubscribe(connection, (message as any).windowId);
+        this.handleTodoSubscribe(connection, message.windowId);
         break;
 
       case 'todo:unsubscribe':
-        this.handleTodoUnsubscribe(connection, (message as any).windowId);
+        this.handleTodoUnsubscribe(connection, message.windowId);
         break;
 
       case 'window:replay':
-        this.handleWindowReplay(connection, (message as any).windowId, (message as any).afterSeq);
+        this.handleWindowReplay(connection, message.windowId, message.afterSeq);
         break;
 
       case 'window:backpressure':
-        this.handleWindowBackpressure((message as any).windowId, (message as any).throttle);
+        if (connection.windowSubscriptions.has(message.windowId)) {
+          this.handleWindowBackpressure(message.windowId, message.throttle);
+        }
         break;
 
       case 'context:subscribe':
-        await this.handleContextSubscribe(connection, (message as any).windowId, (message as any).projectPath);
+        await this.handleContextSubscribe(connection, message.windowId, message.projectPath);
         break;
 
       case 'context:unsubscribe':
-        this.handleContextUnsubscribe(connection, (message as any).windowId);
+        this.handleContextUnsubscribe(connection, message.windowId);
         break;
 
       case 'music:subscribe':
@@ -422,7 +425,7 @@ export class ConnectionManager {
         break;
 
       case 'music:dock:update':
-        this.handleMusicDockUpdate(connection, (message as any).state);
+        this.handleMusicDockUpdate(connection, message.state);
         break;
 
       case 'music:sync':
@@ -457,8 +460,8 @@ export class ConnectionManager {
       case 'stop:activate': {
         const result = stopProtocolManager.activate(
           connection.user.username,
-          (message as any).youtubeUrl,
-          (message as any).message,
+          message.youtubeUrl,
+          message.message,
         );
         if (!result.ok) {
           this.send(connection.ws, {
@@ -467,13 +470,10 @@ export class ConnectionManager {
             message: result.reason || 'Activation failed',
           });
         } else {
-          // Send ack directly (not in ServerMessage union)
-          if (connection.ws.readyState === connection.ws.OPEN) {
-            connection.ws.send(JSON.stringify({
-              type: 'stop:ack',
-              phase: stopProtocolManager.getPhase(),
-            }));
-          }
+          this.send(connection.ws, {
+            type: 'stop:ack',
+            phase: stopProtocolManager.getPhase(),
+          });
         }
         break;
       }
@@ -637,14 +637,19 @@ export class ConnectionManager {
 
     connection.sessionId = sessionId;
 
-    const mainWindow = await this.windowManager.createWindow(
-      sessionId,
-      connection.user.email,
-      true
-    );
-
-    connection.windowSubscriptions.add(mainWindow.id);
-    await this.setupWindowOutput(connection, mainWindow.id);
+    // Create initial windows (default: 4 in 2x2 grid)
+    const initialCount = Math.min(config.session.initialWindows, config.session.maxWindowsPerSession);
+    const windows = [];
+    for (let i = 0; i < initialCount; i++) {
+      const win = await this.windowManager.createWindow(
+        sessionId,
+        connection.user.email,
+        i === 0, // first window is main
+      );
+      connection.windowSubscriptions.add(win.id);
+      await this.setupWindowOutput(connection, win.id);
+      windows.push(win);
+    }
 
     this.deviceManager.registerDevice(sessionId, {
       id: connection.deviceId,
@@ -677,28 +682,24 @@ export class ConnectionManager {
         activeConnections: 1,
         env: {},
       },
-    });
-
-    this.send(connection.ws, {
-      type: 'window:created',
-      window: {
-        id: mainWindow.id,
-        sessionId: mainWindow.sessionId,
-        type: mainWindow.type || 'terminal',
-        name: mainWindow.name,
-        autoName: mainWindow.autoName,
-        positionX: mainWindow.layout.x,
-        positionY: mainWindow.layout.y,
-        width: mainWindow.layout.width,
-        height: mainWindow.layout.height,
-        zIndex: mainWindow.zIndex,
-        isMain: mainWindow.isMain,
-        createdAt: mainWindow.createdAt,
-      },
+      windows: windows.map(w => ({
+        id: w.id,
+        sessionId: w.sessionId,
+        type: w.type || 'terminal',
+        name: w.name,
+        autoName: w.autoName,
+        positionX: w.layout.x,
+        positionY: w.layout.y,
+        width: w.layout.width,
+        height: w.layout.height,
+        zIndex: w.zIndex,
+        isMain: w.isMain,
+        createdAt: w.createdAt,
+      })),
     });
   }
 
-  private async handleWindowCreate(connection: Connection, sessionId: string, windowType?: 'terminal' | 'media'): Promise<void> {
+  private async handleWindowCreate(connection: Connection, sessionId: string, windowType?: 'terminal' | 'media' | 'agent'): Promise<void> {
     try {
       const window = await this.windowManager.createWindow(
         sessionId,
@@ -857,7 +858,7 @@ export class ConnectionManager {
           seq,
         });
       }
-    }, 50);
+    }, RESIZE_CONSTANTS.serverDedupMs);
 
     this.pendingResizes.set(windowId, { cols, rows, seq, timer, connection });
   }
@@ -883,8 +884,6 @@ export class ConnectionManager {
   private async handleWindowSubscribe(
     connection: Connection,
     windowId: string,
-    cols?: number,
-    rows?: number
   ): Promise<void> {
     if (!windowId) return;
     // Debounce key combines connection ID and window ID
@@ -903,7 +902,7 @@ export class ConnectionManager {
       // IMPORTANT: Setup output BEFORE adding to subscriptions
       // This ensures window:restore is sent before any window:output messages
       // can arrive from other connections' PTY listeners
-      await this.setupWindowOutput(connection, windowId, cols, rows);
+      await this.setupWindowOutput(connection, windowId);
       connection.windowSubscriptions.add(windowId);
     }, 300);
 
@@ -1081,7 +1080,7 @@ export class ConnectionManager {
     return path || null;
   }
 
-  private async handleInput(connection: Connection, windowId: string, data: string): Promise<void> {
+  private async handleInput(connection: Connection, windowId: string | undefined, data: string): Promise<void> {
     if (!windowId || !connection.sessionId) return;
 
     const canInput = this.deviceManager.trackInput(windowId, connection.deviceId);
@@ -1147,8 +1146,6 @@ export class ConnectionManager {
   private async setupWindowOutput(
     connection: Connection,
     windowId: string,
-    cols?: number,
-    rows?: number
   ): Promise<void> {
     try {
       // REORDERED to prevent race condition:
@@ -1165,8 +1162,6 @@ export class ConnectionManager {
       const screenContent = await this.windowManager.captureScreen(
         windowId,
         connection.user.email,
-        cols,
-        rows,
         healthScore
       );
 
@@ -1186,7 +1181,7 @@ export class ConnectionManager {
       // Multiple subscriptions to the same window should NOT create duplicate listeners
       let state = this.windowListenerStates.get(windowId);
       if (!state) {
-        state = { registered: false, listenerCount: 0 };
+        state = { registered: false, listenerCount: 0, disposed: false };
         this.windowListenerStates.set(windowId, state);
       }
 
@@ -1194,6 +1189,14 @@ export class ConnectionManager {
         state.registered = true;
 
         pty.onData((data) => {
+          // R-1: Guard against post-cleanup re-entry. node-pty can emit a final
+          // data event AFTER pty.kill() is called (OS event-loop delivery). If
+          // handleDisconnect already set disposed=true (or deleted the state),
+          // discard the data without touching outputRingBuffers — avoids re-creating
+          // the ring buffer that was just cleaned up.
+          const listenerState = this.windowListenerStates.get(windowId);
+          if (!listenerState || listenerState.disposed) return;
+
           // Buffer data in ring buffer and get sequence number
           const ringBuffer = this.getOrCreateRingBuffer(windowId);
           const seq = ringBuffer.append(data);
@@ -1274,32 +1277,77 @@ export class ConnectionManager {
       }
     }
 
-    for (const windowId of connection.windowSubscriptions) {
-      this.windowManager.detachPty(windowId);
+    // Remove this connection from the map BEFORE the subscriber check below so
+    // that the "remaining subscribers" count is accurate.
+    this.connections.delete(connectionId);
 
-      // Cancel any pending resize timer for this window (prevents leaked timer after disconnect)
-      const pendingResize = this.pendingResizes.get(windowId);
-      if (pendingResize) {
-        clearTimeout(pendingResize.timer);
-        this.pendingResizes.delete(windowId);
+    for (const windowId of connection.windowSubscriptions) {
+      // Clean up command buffer for this session:window pair (I-08)
+      if (connection.sessionId) {
+        this.commandBuffers.delete(`${connection.sessionId}:${windowId}`);
       }
 
-      // Cancel any pending coalesce timer (prevents orphaned broadcasts)
-      const coalesce = this.outputCoalesceState.get(windowId);
-      if (coalesce) {
-        if (coalesce.timer) clearTimeout(coalesce.timer);
-        this.outputCoalesceState.delete(windowId);
+      // Check whether any OTHER connection is still subscribed to this window.
+      const hasRemainingSubscribers = Array.from(this.connections.values()).some(
+        (conn) => conn.windowSubscriptions.has(windowId)
+      );
+
+      if (hasRemainingSubscribers) {
+        // Another connection is still using this window — leave the PTY, coalesce
+        // timer, and listener state alone.  Only cancel a pending resize if it was
+        // initiated by THIS (now-gone) connection; if it came from a different
+        // connection we must not discard it.
+        const pendingResize = this.pendingResizes.get(windowId);
+        if (pendingResize && pendingResize.connection === connection) {
+          clearTimeout(pendingResize.timer);
+          this.pendingResizes.delete(windowId);
+        }
+      } else {
+        // This was the last subscriber — kill the PTY so its onData callback and
+        // coalesce timer stop firing with no audience.
+
+        // R-1: Mark the listener state as disposed BEFORE pty.kill so that any
+        // post-kill onData events (delivered by node-pty after kill()) see the flag
+        // and return early without re-creating the ring buffer.
+        const listenerStateToDispose = this.windowListenerStates.get(windowId);
+        if (listenerStateToDispose) {
+          listenerStateToDispose.disposed = true;
+        }
+
+        this.windowManager.detachPty(windowId, /* killPty */ true);
+
+        // Clean up the listener-state entry so the next attach re-registers.
+        this.windowListenerStates.delete(windowId);
+
+        // Cancel any pending resize timer (no one left to receive the ack).
+        const pendingResize = this.pendingResizes.get(windowId);
+        if (pendingResize) {
+          clearTimeout(pendingResize.timer);
+          this.pendingResizes.delete(windowId);
+        }
+
+        // Cancel the coalesce timer and drop buffered output (no subscribers).
+        const coalesce = this.outputCoalesceState.get(windowId);
+        if (coalesce) {
+          if (coalesce.timer) clearTimeout(coalesce.timer);
+          this.outputCoalesceState.delete(windowId);
+        }
+
+        // Clean up ring buffer — no remaining subscribers means nobody to replay to (F2 / I-08b)
+        const ringBuffer = this.outputRingBuffers.get(windowId);
+        if (ringBuffer) {
+          ringBuffer.clear?.();  // if RingBuffer has a clear method; otherwise just delete
+          this.outputRingBuffers.delete(windowId);
+        }
       }
     }
-
-    this.connections.delete(connectionId);
   }
 
   private send(ws: WebSocket, message: ServerMessage): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
     } else {
-      const msgType = (message as any).type || 'unknown';
+      const msgType = 'type' in message ? (message as { type: string }).type : 'unknown';
       if (msgType === 'canvas:artifact') {
         console.warn(`[Artifact] Message dropped - WebSocket state: ${ws.readyState} (0=CONNECTING, 2=CLOSING, 3=CLOSED)`);
       }

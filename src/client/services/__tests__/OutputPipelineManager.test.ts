@@ -800,4 +800,207 @@ describe('OutputPipelineManager', () => {
       expect(pipeline.getLastProcessedSeq('window-1')).toBe(15);
     });
   });
+
+  describe('I-09: throttle window reset ordering (Fb-2 stale-mode latch)', () => {
+    // Regression tests for the bug where bytesInWindow was measured over a stale
+    // (expired) window, producing an inflated or deflated rate that locked throttle
+    // mode incorrectly on the first flush after an idle gap.
+
+    it('first flush after 2s idle resets to normal mode (stale-window latch regression)', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // Build up 80 KB — with a fresh pipeline window (elapsed≈0ms), bytesInWindow=80000
+      // and effectiveElapsed=1ms → critical mode (200ms timer).
+      const burst = 'x'.repeat(80_000);
+      pipeline.enqueue('window-1', burst);
+
+      // Let the critical-mode timer fire, then clear. Now bytesInWindow=80000,
+      // windowStartTime is at the original t=0 position.
+      vi.advanceTimersByTime(200); // critical timer fires
+      onFlush.mockClear();
+
+      // Idle for 2 s — far past the 1 s THROTTLE_WINDOW_MS boundary.
+      vi.advanceTimersByTime(2_000);
+
+      // Enqueue a tiny 512-byte message. Old code: bytesPerSec = 80000/2200*1000 ≈ 36 KB/s
+      // → light mode (24 ms delay). Fix: windowJustReset=true → bytesPerSec=0 → normal (0 ms).
+      const small = 'y'.repeat(512);
+      pipeline.enqueue('window-1', small);
+
+      // Normal mode fires on the next tick (≤1 ms), NOT after a throttle delay.
+      vi.advanceTimersByTime(1);
+      expect(onFlush).toHaveBeenCalledTimes(1);
+      expect(onFlush).toHaveBeenCalledWith('window-1', small);
+    });
+
+    it('active burst within window still throttles correctly after fix', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // 600 KB in the current window — must still hit critical mode.
+      const bigBurst = 'x'.repeat(600_000);
+      pipeline.enqueue('window-1', bigBurst);
+
+      // Critical delay is 200 ms — should NOT flush immediately.
+      vi.advanceTimersByTime(1);
+      expect(onFlush).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(199); // Total 200 ms
+      expect(onFlush).toHaveBeenCalledTimes(1);
+    });
+
+    it('window resets cleanly: first message of new burst flushes at normal, subsequent burst escalates', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // First burst — enqueue 80 KB. Critical mode → 200 ms timer.
+      pipeline.enqueue('window-1', 'x'.repeat(80_000));
+      vi.advanceTimersByTime(200); // let critical timer fire
+      onFlush.mockClear();
+
+      // Idle past window boundary (THROTTLE_WINDOW_MS = 1000 ms).
+      vi.advanceTimersByTime(1_500);
+
+      // First message of fresh window: windowJustReset=true → bytesPerSec=0 → normal.
+      // Flushes on next tick (setTimeout 0 ≈ 1 ms).
+      pipeline.enqueue('window-1', 'x'.repeat(300_000));
+      vi.advanceTimersByTime(1);
+      expect(onFlush).toHaveBeenCalledTimes(1); // flushed immediately — no throttle delay
+      onFlush.mockClear();
+
+      // Second message in the fresh window: scheduleFlush now sees the prior 300 KB
+      // accumulated in bytesInWindow (still within the reset window). That rate exceeds
+      // BYTES_PER_SEC_CRITICAL → critical mode (200 ms delay).
+      pipeline.enqueue('window-1', 'x'.repeat(100));
+      vi.advanceTimersByTime(1);
+      expect(onFlush).not.toHaveBeenCalled(); // critical delay (200 ms) not yet elapsed
+      vi.advanceTimersByTime(199);
+      expect(onFlush).toHaveBeenCalledTimes(1);
+    });
+
+    it('R-3: bytes preserved across window reset — second burst message throttles correctly', () => {
+      // Regression: after a >1s idle, bytesInWindow was zeroed including the current
+      // message's bytes. The next message in the same fresh window saw no accumulated
+      // bytes and incorrectly stayed in normal mode despite heavy output.
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // Build initial burst — critical mode (200 ms timer)
+      pipeline.enqueue('window-1', 'x'.repeat(80_000));
+      vi.advanceTimersByTime(200);
+      onFlush.mockClear();
+
+      // Idle past the throttle window boundary (1000 ms)
+      vi.advanceTimersByTime(1_500);
+
+      // First message of fresh window: 200 KB. windowJustReset=true → normal mode (immediate).
+      pipeline.enqueue('window-1', 'x'.repeat(200_000));
+      vi.advanceTimersByTime(1);
+      expect(onFlush).toHaveBeenCalledTimes(1); // flushed in normal mode
+      onFlush.mockClear();
+
+      // R-3 correctness check: bytesInWindow must reflect the 200 KB carried forward.
+      // Second message in the fresh window — scheduleFlush sees prior 200 KB accumulated
+      // → rate exceeds BYTES_PER_SEC_CRITICAL → critical mode (200 ms delay).
+      // Without the fix, bytesInWindow=0 after reset → rate=0 → normal → flushes immediately.
+      pipeline.enqueue('window-1', 'x'.repeat(100));
+      vi.advanceTimersByTime(1);
+      expect(onFlush).not.toHaveBeenCalled(); // must be throttled (critical delay not elapsed)
+      vi.advanceTimersByTime(199);
+      expect(onFlush).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('TC-1: seq=0 edge case — first message with seq=0 is processed correctly', () => {
+    // Documents invariant: seq=0 data flows through (not discarded). lastProcessedSeq
+    // stays 0 after seq=0 because `0 > 0` is false, but the DATA itself is processed.
+    // If the server ever sends seq=0 as the first real message, no data is lost.
+    it('TC-1: seq=0 message is processed (data flows), lastProcessedSeq stays 0', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // Fresh pipeline — lastProcessedSeq starts at 0
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(0);
+
+      // Enqueue with seq=0 — guard is `seq > lastProcessedSeq` (0 > 0 = false), so
+      // lastProcessedSeq does NOT advance, but data is NOT discarded (guard only tracks seq).
+      pipeline.enqueue('window-1', 'hello', 0);
+      flushTimers();
+
+      // Data must flow through
+      expect(onFlush).toHaveBeenCalledTimes(1);
+      expect(onFlush).toHaveBeenCalledWith('window-1', 'hello');
+
+      // lastProcessedSeq stays 0 (seq=0 does not satisfy `0 > 0`)
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(0);
+
+      // Next message seq=1 advances the tracker
+      pipeline.enqueue('window-1', 'world', 1);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(1);
+    });
+
+    it('TC-1: seq=0 is not discarded even while restore is NOT in progress', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // No guards active — seq=0 data must pass through normally
+      pipeline.enqueue('window-1', 'first-data', 0);
+      flushTimers();
+      expect(onFlush).toHaveBeenCalledWith('window-1', 'first-data');
+    });
+  });
+
+  describe('TC-3: combined 1049h+1049l in same chunk — enter+exit alt-buffer', () => {
+    // Documents behaviour when enter-alt-buffer and exit-alt-buffer arrive in the SAME
+    // WebSocket chunk (e.g. less/man closing quickly in high-bandwidth tmux pane).
+    // detectInkRedraw matches ?1049h first → coalescing triggered → buffer replaced.
+    // The exit bytes (?1049l + shell prompt) are included in the replaced buffer and
+    // will be written to the terminal — so the shell prompt is NOT lost.
+    it('TC-3: chunk with both \\x1b[?1049h and \\x1b[?1049l coalesces (prior output dropped, new chunk kept)', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // Prior output already buffered
+      pipeline.enqueue('window-1', 'prior output');
+
+      // Single chunk containing both enter and exit alt-buffer + shell prompt
+      const combined = '\x1b[?1049hframe content\x1b[?1049lshell prompt $';
+      pipeline.enqueue('window-1', combined);
+
+      vi.advanceTimersByTime(25);
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+
+      // detectInkRedraw matches ?1049h → buffer replaced → prior output gone
+      expect(flushed).not.toContain('prior output');
+      // The combined chunk (including exit + prompt) is what replaces the buffer
+      expect(flushed).toContain('shell prompt $');
+      expect(flushed).toContain('frame content');
+    });
+
+    it('TC-3: two separate chunks — 1049h then 1049l+prompt — prompt is NOT coalesced away', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // Chunk 1: enter alt-buffer (triggers coalescing — prior content replaced)
+      pipeline.enqueue('window-1', 'prior output');
+      pipeline.enqueue('window-1', '\x1b[?1049hframe content');
+
+      vi.advanceTimersByTime(25);
+      onFlush.mockClear();
+
+      // Chunk 2: exit alt-buffer + shell prompt arrives as a NEW message
+      // detectInkRedraw must NOT match ?1049l — so no buffer replacement
+      pipeline.enqueue('window-1', 'buffered before exit');
+      pipeline.enqueue('window-1', '\x1b[?1049lshell prompt $');
+
+      vi.advanceTimersByTime(25);
+      const flushed2 = onFlush.mock.calls.map(c => c[1]).join('');
+
+      // Neither message triggers coalescing — both must be present
+      expect(flushed2).toContain('shell prompt $');
+      expect(flushed2).toContain('buffered before exit');
+    });
+  });
 });

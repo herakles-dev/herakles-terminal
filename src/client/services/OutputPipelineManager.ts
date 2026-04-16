@@ -230,7 +230,10 @@ export class OutputPipelineManager {
     return state;
   }
 
-  private scheduleFlush(windowId: string): void {
+  // R-3: currentMessageBytes is the byte count of the message being enqueued in this call.
+  // When the throttle window expires and resets, these bytes are carried into the fresh
+  // window so rate classification for the NEXT message is accurate.
+  private scheduleFlush(windowId: string, currentMessageBytes: number = 0): void {
     const state = this.windows.get(windowId);
     if (!state) return;
 
@@ -244,15 +247,35 @@ export class OutputPipelineManager {
     const now = performance.now();
     const windowElapsed = now - state.windowStartTime;
 
-    // Calculate throttle mode based on current or expired window
-    let shouldResetWindow = false;
+    // I-09 / Fb-2: Reset expired window BEFORE calculating rate.
+    // Old ordering computed bytesPerSec from stale bytesInWindow accumulated over a
+    // multi-second idle gap, producing an artificially inflated or deflated rate that
+    // latched throttle mode incorrectly (e.g. 80 KB burst in 100 ms, then 1.5 s idle:
+    // old code → 80000 / 1600 * 1000 = 50 KB/s → light mode on next tiny message).
+    //
+    // Note: enqueue() adds bytesInWindow += filtered.length BEFORE calling scheduleFlush,
+    // so after a reset bytesInWindow contains only the current message's bytes. With
+    // effectiveElapsed near 0, that would produce a falsely huge rate. We therefore
+    // force normal mode on the first flush of every fresh window — the prior burst is
+    // over and a single message cannot by itself represent a sustained rate.
+    let windowJustReset = false;
     if (windowElapsed > THROTTLE_WINDOW_MS) {
-      shouldResetWindow = true;
+      state.windowStartTime = now;
+      // R-3: Carry the current message's bytes into the fresh window. enqueue() adds
+      // bytesInWindow += filtered.length BEFORE calling scheduleFlush, so zeroing here
+      // would lose those bytes — the next call's rate calc would start from 0. Instead,
+      // seed the new window with just the current message's bytes so the second message
+      // in the burst gets an accurate rate reading.
+      state.bytesInWindow = currentMessageBytes;
+      state.flushCountInWindow = 0;
+      windowJustReset = true;
     }
 
-    // Calculate bytes/sec for throttle mode decision
-    const effectiveElapsed = Math.max(windowElapsed, 1); // Avoid division by zero
-    const bytesPerSec = (state.bytesInWindow / effectiveElapsed) * 1000;
+    // Calculate bytes/sec for throttle mode decision.
+    // Skip when window just reset: currentMessageBytes is the only sample, elapsed ≈ 0ms
+    // → rate is meaningless. Default to normal to release the stale-mode latch.
+    const effectiveElapsed = Math.max(windowElapsed, 1); // use pre-reset elapsed for non-reset path
+    const bytesPerSec = windowJustReset ? 0 : (state.bytesInWindow / effectiveElapsed) * 1000;
 
     // Update throttle mode based on byte rate (scaled for mobile)
     const prevMode = state.throttleMode;
@@ -271,13 +294,6 @@ export class OutputPipelineManager {
         `[OutputPipeline] ${windowId}: Throttle ${prevMode} → ${state.throttleMode} ` +
         `(${(bytesPerSec / 1024).toFixed(1)} KB/s, ${state.flushCountInWindow} flushes/sec)`
       );
-    }
-
-    // Reset window if expired
-    if (shouldResetWindow) {
-      state.windowStartTime = now;
-      state.bytesInWindow = 0;
-      state.flushCountInWindow = 0;
     }
 
     state.flushCountInWindow++;
@@ -396,7 +412,7 @@ export class OutputPipelineManager {
       state.buffer = filtered;
       state.lastEraseHomeTime = performance.now();
       state.bytesInWindow += filtered.length;
-      this.scheduleFlush(windowId);
+      this.scheduleFlush(windowId, filtered.length);
       return;
     }
 
@@ -433,7 +449,7 @@ export class OutputPipelineManager {
     // Track bytes for throttle calculation (use filtered length)
     state.bytesInWindow += filtered.length;
 
-    this.scheduleFlush(windowId);
+    this.scheduleFlush(windowId, filtered.length);
   }
 
   flush(windowId: string): string {
