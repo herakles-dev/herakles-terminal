@@ -403,6 +403,80 @@ describe('OutputPipelineManager', () => {
     });
   });
 
+  describe('Ink redraw coalescing — I-03 extended sequences', () => {
+    // POSITIVE: must trigger buffer replacement (coalescing)
+    it('I-03: enter-alt-buffer (\\x1b[?1049h) triggers coalescing', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      pipeline.enqueue('window-1', 'prior output');
+      pipeline.enqueue('window-1', '\x1b[?1049h\x1b[HFrame A');
+
+      vi.advanceTimersByTime(25);
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      // Buffer must be replaced — prior output discarded
+      expect(flushed).toContain('Frame A');
+      expect(flushed).not.toContain('prior output');
+    });
+
+    it('I-03: erase-saved-lines (\\x1b[3J) triggers coalescing', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      pipeline.enqueue('window-1', 'prior output');
+      pipeline.enqueue('window-1', '\x1b[3J\x1b[HFrame B');
+
+      vi.advanceTimersByTime(25);
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      expect(flushed).toContain('Frame B');
+      expect(flushed).not.toContain('prior output');
+    });
+
+    it('I-03: RIS (\\x1bc) triggers coalescing', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      pipeline.enqueue('window-1', 'prior output');
+      pipeline.enqueue('window-1', '\x1bcFrame C');
+
+      vi.advanceTimersByTime(25);
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      expect(flushed).toContain('Frame C');
+      expect(flushed).not.toContain('prior output');
+    });
+
+    it('I-03: multiple \\x1b[?1049h frames — only latest buffer survives', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      pipeline.enqueue('window-1', '\x1b[?1049hFrame X');
+      pipeline.enqueue('window-1', '\x1b[?1049hFrame Y');
+      pipeline.enqueue('window-1', '\x1b[?1049hFrame Z');
+
+      flushTimers();
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      expect(flushed).toContain('Frame Z');
+      expect(flushed).not.toContain('Frame X');
+      expect(flushed).not.toContain('Frame Y');
+    });
+
+    // NEGATIVE: exit-alt-buffer MUST NOT trigger coalescing (MC-1)
+    it('MC-1: exit-alt-buffer (\\x1b[?1049l) does NOT replace buffer', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      // Simulate primary-buffer content buffered before the exit
+      pipeline.enqueue('window-1', 'shell prompt $');
+      pipeline.enqueue('window-1', '\x1b[?1049lcontent after alt-buffer exit');
+
+      vi.advanceTimersByTime(25);
+      const flushed = onFlush.mock.calls.map(c => c[1]).join('');
+      // Both must be present — no replacement
+      expect(flushed).toContain('shell prompt $');
+      expect(flushed).toContain('content after alt-buffer exit');
+    });
+  });
+
   describe('Ink redraw coalescing', () => {
     it('detectInkRedraw matches erase+home sequence', () => {
       const onFlush = vi.fn();
@@ -625,6 +699,105 @@ describe('OutputPipelineManager', () => {
       vi.advanceTimersByTime(200);
 
       expect(onBackpressure).toHaveBeenCalledWith('window-1', false);
+    });
+  });
+
+  describe('Sequence tracking during restore/recovery (I-05 / Fb-3)', () => {
+    it('Test 1 — restore path: seq does NOT advance for discarded messages', () => {
+      const onFlush = vi.fn();
+      const onReplayRequest = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+      pipeline.setReplayRequestCallback(onReplayRequest);
+
+      // Establish a baseline seq
+      pipeline.enqueue('window-1', 'normal data', 99);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(99);
+
+      // Enter restore mode — subsequent enqueues are discarded
+      pipeline.setRestoreInProgress('window-1', true);
+      pipeline.enqueue('window-1', 'foo', 100);
+      pipeline.enqueue('window-1', 'bar', 101);
+      pipeline.enqueue('window-1', 'baz', 102);
+
+      // Seq must NOT have advanced for discarded messages
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(99);
+
+      // Exiting restore triggers replay request with the last-actually-processed seq
+      pipeline.setRestoreInProgress('window-1', false);
+      expect(onReplayRequest).toHaveBeenCalledWith('window-1', 99);
+    });
+
+    it('Test 2 — recovery path: seq does NOT advance for discarded messages', () => {
+      const onFlush = vi.fn();
+      const onReplayRequest = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+      pipeline.setReplayRequestCallback(onReplayRequest);
+
+      // Establish a baseline seq
+      pipeline.enqueue('window-1', 'normal data', 50);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(50);
+
+      // Enter recovery mode
+      pipeline.setRecoveryInProgress('window-1', true);
+      pipeline.enqueue('window-1', 'discarded-a', 51);
+      pipeline.enqueue('window-1', 'discarded-b', 52);
+      pipeline.enqueue('window-1', 'discarded-c', 53);
+
+      // Seq must NOT have advanced
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(50);
+
+      // Exiting recovery triggers replay with last-actually-processed seq
+      pipeline.setRecoveryInProgress('window-1', false);
+      expect(onReplayRequest).toHaveBeenCalledWith('window-1', 50);
+    });
+
+    it('Test 3 — normal path unaffected: seq advances correctly when no guards active', () => {
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      pipeline.enqueue('window-1', 'data', 50);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(50);
+
+      pipeline.enqueue('window-1', 'data', 51);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(51);
+
+      // Lower seq does not downgrade lastProcessedSeq
+      pipeline.enqueue('window-1', 'data', 49);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(51);
+    });
+
+    it('Test 4 — mixed: normal → restore → normal tracks seq correctly end-to-end', () => {
+      const onFlush = vi.fn();
+      const onReplayRequest = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+      pipeline.setReplayRequestCallback(onReplayRequest);
+
+      // Normal messages advance seq
+      pipeline.enqueue('window-1', 'a', 10);
+      pipeline.enqueue('window-1', 'b', 11);
+      pipeline.enqueue('window-1', 'c', 12);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(12);
+
+      // Restore: discarded messages must NOT advance seq
+      pipeline.setRestoreInProgress('window-1', true);
+      pipeline.enqueue('window-1', 'discarded', 13);
+      pipeline.enqueue('window-1', 'discarded', 14);
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(12);
+
+      // Exiting restore requests replay from seq 12
+      pipeline.setRestoreInProgress('window-1', false);
+      expect(onReplayRequest).toHaveBeenCalledWith('window-1', 12);
+
+      // Normal messages after restore advance seq again
+      pipeline.enqueue('window-1', 'post-restore', 15);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(15);
     });
   });
 });

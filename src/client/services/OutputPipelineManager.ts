@@ -342,25 +342,30 @@ export class OutputPipelineManager {
    * without full erase. Those programs must NOT trigger buffer replacement.
    */
   private detectInkRedraw(data: string): boolean {
-    return /\x1b\[2J/.test(data);
+    // Matches: erase-display (2J), erase-saved-lines (3J), enter-alt-buffer (?1049h), RIS (ESC c).
+    // Intentionally EXCLUDES \x1b[?1049l (exit-alt-buffer) — coalescing on exit would
+    // discard primary-buffer content buffered before the exit. See issues.md I-03 / MC-1.
+    return /\x1b\[(?:2J|3J|\?1049h)|\x1bc/.test(data);
   }
 
   enqueue(windowId: string, data: string, seq?: number): void {
     const state = this.getOrCreateState(windowId);
 
-    // Track sequence number regardless of discard state
-    if (seq !== undefined && seq > state.lastProcessedSeq) {
-      state.lastProcessedSeq = seq;
-    }
-
     // Discard data during restore - restore handler writes directly to terminal
     if (state.restoreInProgress) {
-      return;
+      return;  // seq NOT advanced — replay after restore will re-fetch this message
     }
 
     // Discard data during WebGL recovery - terminal was cleared and is reinitializing
     if (state.recoveryInProgress) {
-      return;
+      return;  // seq NOT advanced — replay after recovery will re-fetch this message
+    }
+
+    // Track sequence number only for messages we actually process (I-05 / Fb-3 fix).
+    // Previously this was above the guards, causing replay requests to skip the
+    // last-discarded seq on restore/recovery exit.
+    if (seq !== undefined && seq > state.lastProcessedSeq) {
+      state.lastProcessedSeq = seq;
     }
 
     // Filter Claude thinking output from live data
