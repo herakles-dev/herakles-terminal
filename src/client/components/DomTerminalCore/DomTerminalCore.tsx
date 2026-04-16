@@ -65,6 +65,11 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     const pendingRenderRef = useRef(false);
     const cursorVisibleRef = useRef(true); // DECTCEM ?25h/l state
     const dirtyFullRef = useRef(true); // first render is always full
+    // Ink-aligned dirty row tracking: xterm's onRender({start, end}) tells us which
+    // rows changed. We accumulate ranges between RAF frames to narrow diff() scope.
+    const dirtyStartRef = useRef<number>(0);
+    const dirtyEndRef = useRef<number>(0);
+    const hasDirtyRangeRef = useRef(false);
     const scheduleRenderRef = useRef<(() => void) | null>(null);
     const cleanupRef = useRef<(() => void) | null>(null);
     const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,6 +81,14 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
     // Reference to the .dom-term-viewport element so setTheme() can update CSS variables
     // on it directly — enabling instant theme switching without clearing the style cache.
     const viewportRef = useRef<HTMLElement | null>(null);
+    // Stable refs for props captured by the init() closure — prevents stale closure
+    // bugs when isMobile flips on orientation change or fontSize/onResize update.
+    const onDataRef = useRef(onData);
+    onDataRef.current = onData;
+    const onResizeRef = useRef(onResize);
+    onResizeRef.current = onResize;
+    const fontSizeRef = useRef(fontSize);
+    fontSizeRef.current = fontSize;
 
     // ---------------------------------------------------------------------------
     // Search overlay state
@@ -112,8 +125,17 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // non-zero dimensions, guaranteeing the flex layout has settled.
         const initialSize = await new Promise<{ width: number; height: number }>((resolve) => {
           let resolved = false;
+          // Fallback: if the element stays hidden (display:none tab) the ResizeObserver
+          // never fires — resolve after 5s to prevent init() hanging indefinitely.
+          const fallbackTimer = setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              initObserver.disconnect();
+              resolve({ width: outer.clientWidth || window.innerWidth, height: outer.clientHeight || window.innerHeight / 2 });
+            }
+          }, 5000);
           const initObserver = new ResizeObserver((entries) => {
-            if (resolved) return;
+            if (resolved || cancelled) { initObserver.disconnect(); clearTimeout(fallbackTimer); return; }
             const entry = entries[0];
             if (!entry) return;
             let width: number, height: number;
@@ -126,6 +148,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             }
             if (width > 0 && height > 0) {
               resolved = true;
+              clearTimeout(fallbackTimer);
               initObserver.disconnect();
               resolve({ width, height });
             }
@@ -167,6 +190,15 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
         term.open(hiddenContainer);
         termRef.current = term;
+
+        // Partial cleanup: if the component unmounts during async init (between
+        // document.fonts.ready and the rest of init), this ensures resources are
+        // freed rather than leaking.
+        cleanupRef.current = () => {
+          term.dispose();
+          hiddenContainer.remove();
+          visibleContainer.remove();
+        };
 
         // Hide xterm's canvases
         hiddenContainer.querySelectorAll('canvas').forEach((c) => {
@@ -301,12 +333,19 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             r.renderAll(backBuf);
             dirtyFullRef.current = false;
           } else {
-            // Full diff — no row-range restriction. Safe for all terminal ops.
-            const dirty = backBuf.diff(frontBuf);
+            // Ink-aligned: use xterm's onRender dirty range to narrow diff scope.
+            // When onRender fires, it tells us exactly which rows xterm touched.
+            // We pass that range to diff() so only those rows are compared, avoiding
+            // full-buffer scans on every frame (mirrors Ink's damage rectangle concept).
+            const startRow = hasDirtyRangeRef.current ? dirtyStartRef.current : undefined;
+            const endRow = hasDirtyRangeRef.current ? dirtyEndRef.current : undefined;
+            const dirty = backBuf.diff(frontBuf, startRow, endRow);
             if (dirty.size > 0) {
               r.updateRows(backBuf, dirty);
             }
           }
+          // Reset dirty range for next frame
+          hasDirtyRangeRef.current = false;
 
           frontBuf.copyFrom(backBuf);
 
@@ -346,6 +385,13 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
         function scheduleFullRender(): void {
           dirtyFullRef.current = true;
+          // Reset dirty range so post-resize incremental renders don't use a
+          // stale narrow range from a pre-resize onRender. Without this, diff()
+          // only checks the narrow range and rows outside it stay permanently
+          // stale — the "need to refresh" bug.
+          hasDirtyRangeRef.current = false;
+          dirtyStartRef.current = 0;
+          dirtyEndRef.current = 0;
           scheduleRender();
         }
 
@@ -355,7 +401,17 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // onRender fires after xterm commits a complete batch to the buffer.
         // Notify VirtualScroller about new output so it can track scrollback growth
         // and auto-scroll to bottom when pinned.
-        const renderDisposable = term.onRender((_e) => {
+        const renderDisposable = term.onRender((e) => {
+          // Accumulate dirty row range from xterm — narrows diff() scope in performRender.
+          // Multiple onRender events between RAF frames get merged into the widest range.
+          if (hasDirtyRangeRef.current) {
+            dirtyStartRef.current = Math.min(dirtyStartRef.current, e.start);
+            dirtyEndRef.current = Math.max(dirtyEndRef.current, e.end);
+          } else {
+            dirtyStartRef.current = e.start;
+            dirtyEndRef.current = e.end;
+            hasDirtyRangeRef.current = true;
+          }
           if (virtualScrollerRef.current) {
             virtualScrollerRef.current.onNewOutput();
           }
@@ -375,9 +431,13 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           if (!virtualScrollerRef.current || virtualScrollerRef.current.isAtBottom()) {
             cursor.setPosition(buf.cursorX, buf.cursorY);
           }
+          // Ensure cursor-only moves (no data output) trigger a render.
+          // Without this, a cursor move on an idle terminal would update
+          // the cursor DOM element directly but never schedule a RAF.
+          scheduleRender();
         });
 
-        const dataDisposable = term.onData((data) => onData(data));
+        const dataDisposable = term.onData((data) => onDataRef.current(data));
 
         // xterm's own scroll events (e.g. term.scrollLines()) — sync our scroller
         // and trigger a full render so the view updates immediately.
@@ -409,40 +469,52 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         // Use contentBoxSize from ResizeObserver entries when available —
         // these are authoritative post-layout dimensions that avoid the
         // stale-getBoundingClientRect problem during deep flex resolution.
-        let latestROEntry: ResizeObserverEntry | undefined;
+        // Copy dimensions immediately from ResizeObserver entries rather than
+        // storing the live entry object — Chromium can mutate contentBoxSize
+        // on reused entries before the 80ms debounce fires.
+        let latestROSize: { width: number; height: number } | undefined;
 
         const applyResize = () => {
           const t = termRef.current;
           if (!t || !outer) return;
 
           let dims;
-          const entry = latestROEntry;
-          if (entry?.contentBoxSize?.[0]) {
-            const { inlineSize, blockSize } = entry.contentBoxSize[0];
+          if (latestROSize) {
             dims = calculateTerminalDimensionsFromSize(
-              inlineSize, blockSize, fontFamily, fontSize, PADDING
+              latestROSize.width, latestROSize.height, fontFamily, fontSizeRef.current, PADDING
             );
           } else {
-            dims = calculateTerminalDimensions(outer, fontFamily, fontSize, PADDING);
+            dims = calculateTerminalDimensions(outer, fontFamily, fontSizeRef.current, PADDING);
           }
 
           if (dims.cols !== t.cols || dims.rows !== t.rows) {
-            // Update VirtualScroller BEFORE t.resize() — resize fires onRender
-            // synchronously, and onNewOutput() needs current viewportRows to
-            // compute scroll state correctly for tall desktop windows.
+            // Update everything BEFORE t.resize() — xterm fires onRender
+            // synchronously inside resize(), and the render path needs
+            // correct buffer dimensions, row elements, and viewport rows.
             virtualScrollerRef.current?.setViewportRows(dims.rows);
-            t.resize(dims.cols, dims.rows);
             frontBufferRef.current?.resize(dims.cols, dims.rows);
             backBufferRef.current?.resize(dims.cols, dims.rows);
             rendererRef.current?.ensureRows(dims.rows);
+            t.resize(dims.cols, dims.rows);
             // RAF-batched full render (coalesces with onRender from term.resize)
             scheduleFullRender();
-            onResize?.(dims.cols, dims.rows);
+            onResizeRef.current?.(dims.cols, dims.rows);
           }
         };
 
         const resizeObserver = new ResizeObserver((entries) => {
-          latestROEntry = entries[0];
+          const entry = entries[0];
+          if (entry?.contentBoxSize?.[0]) {
+            latestROSize = {
+              width: entry.contentBoxSize[0].inlineSize,
+              height: entry.contentBoxSize[0].blockSize,
+            };
+          } else if (entry) {
+            latestROSize = {
+              width: entry.contentRect.width,
+              height: entry.contentRect.height,
+            };
+          }
           if (resizeDebounceRef.current !== null) {
             clearTimeout(resizeDebounceRef.current);
           }
@@ -501,6 +573,8 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
       // instantly without clearing the style cache or re-rendering.
       rendererRef.current?.setTheme(themeConfig, viewportRef.current ?? undefined);
       cursorRef.current?.setColor(themeConfig.cursor);
+      // Match theme bg — fills the Math.floor gap at bottom (I-01 / Fc-1)
+      if (outerRef.current) outerRef.current.style.backgroundColor = themeConfig.background;
       // Only re-render all rows when CSS vars are NOT active (first call before
       // viewportRef is set, or fallback path). Once CSS vars are in use, the
       // browser updates span colors automatically via the cascade.
@@ -518,7 +592,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
       cursorRef.current?.setCharDimensions(charWidth, lineHeight);
       rendererRef.current?.setLineHeight(lineHeight);
 
-      const viewport = outerRef.current.querySelector('.dom-term-viewport') as HTMLElement;
+      const viewport = viewportRef.current;
       if (viewport) {
         viewport.style.fontSize = `${fontSize}px`;
         viewport.style.lineHeight = `${lineHeight}px`;
@@ -533,9 +607,9 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         rendererRef.current?.ensureRows(dims.rows);
         dirtyFullRef.current = true;
         scheduleRenderRef.current?.();
-        onResize?.(dims.cols, dims.rows);
+        onResizeRef.current?.(dims.cols, dims.rows);
       }
-    }, [fontSize, onResize]);
+    }, [fontSize]);
 
     useImperativeHandle(
       ref,
@@ -578,7 +652,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
               rendererRef.current?.ensureRows(dims.rows);
               dirtyFullRef.current = true;
               scheduleRenderRef.current?.();
-              onResize?.(dims.cols, dims.rows);
+              onResizeRef.current?.(dims.cols, dims.rows);
             }
           }
         },
@@ -595,6 +669,8 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           const themeConfig = getTheme(themeName);
           rendererRef.current?.setTheme(themeConfig, viewportRef.current ?? undefined);
           cursorRef.current?.setColor(themeConfig.cursor);
+          // Match theme bg — fills the Math.floor gap at bottom (I-01 / Fc-1)
+          if (outerRef.current) outerRef.current.style.backgroundColor = themeConfig.background;
           // Re-render only when CSS vars are not active (viewportRef not yet set)
           if (!viewportRef.current && frontBufferRef.current && rendererRef.current) {
             rendererRef.current.renderAll(frontBufferRef.current);
@@ -633,6 +709,7 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
         <SearchOverlay
           terminalRef={termRef}
           rendererRef={rendererRef}
+          scrollerRef={virtualScrollerRef}
           visible={searchVisible}
           onClose={handleSearchClose}
         />
