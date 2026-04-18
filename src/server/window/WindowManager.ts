@@ -14,7 +14,7 @@ export interface WindowLayout {
 export interface WindowInfo {
   id: string;
   sessionId: string;
-  type: 'terminal' | 'media';
+  type: 'terminal' | 'media' | 'agent';
   name?: string;
   autoName?: string;
   layout: WindowLayout;
@@ -70,7 +70,7 @@ export class WindowManager {
     isMainOrName: boolean | string = false,
     cols = 80,
     rows = 24,
-    windowType: 'terminal' | 'media' = 'terminal'
+    windowType: 'terminal' | 'media' | 'agent' = 'terminal'
   ): Promise<WindowInfo> {
     // [FIX-1] Validate session exists before any state changes
     const session = this.store.getSession(sessionId, userEmail);
@@ -240,14 +240,18 @@ export class WindowManager {
     }
 
     const pty = this.activePtys.get(windowId);
-    
+
+    let tmuxResized = false;
     try {
       await this.tmux.resizeSession(windowId, cols, rows);
+      tmuxResized = true;
     } catch (error) {
       console.warn(`[WindowManager] tmux resize failed for ${windowId}:`, error);
     }
-    
-    if (pty) {
+
+    // Only resize PTY if tmux resize succeeded — otherwise the two get
+    // permanently out of sync (PTY at new dims, tmux at old dims).
+    if (pty && tmuxResized) {
       try {
         pty.resize(cols, rows);
       } catch (error) {
@@ -293,7 +297,7 @@ export class WindowManager {
     return {
       id: record.id,
       sessionId: record.session_id,
-      type: (record.type || 'terminal') as 'terminal' | 'media',
+      type: (record.type || 'terminal') as 'terminal' | 'media' | 'agent',
       name: record.name || undefined,
       autoName: record.auto_name || undefined,
       layout: {
@@ -320,9 +324,12 @@ export class WindowManager {
     return allWindows;
   }
 
-  detachPty(windowId: string): void {
+  detachPty(windowId: string, killPty: boolean = false): void {
     const pty = this.activePtys.get(windowId);
     if (pty) {
+      if (killPty) {
+        pty.kill();
+      }
       this.activePtys.delete(windowId);
     }
   }
@@ -336,15 +343,11 @@ export class WindowManager {
    *
    * @param windowId - Window UUID
    * @param userEmail - User email for authorization
-   * @param cols - Optional columns for pre-capture resize
-   * @param rows - Optional rows for pre-capture resize
    * @param healthScore - Optional WebGL health score (0-100) for adaptive scrollback
    */
   async captureScreen(
     windowId: string,
     userEmail: string,
-    cols?: number,
-    rows?: number,
     healthScore?: number
   ): Promise<string> {
     const window = await this.getWindow(windowId, userEmail);
@@ -352,15 +355,10 @@ export class WindowManager {
       return '';
     }
 
-    if (cols && rows && cols > 0 && rows > 0) {
-      try {
-        await this.tmux.resizeSession(windowId, cols, rows);
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } catch (error) {
-        console.warn(`[WindowManager] Pre-capture resize failed for ${windowId}:`, error);
-      }
-    }
-
+    // Note: we do NOT resize tmux here. The resize is already handled by
+    // resizeWindow() via the window:resize handler. A second resize here would
+    // trigger a duplicate SIGWINCH, causing tmux to re-render during the drain
+    // window — producing corrupted/duplicate content on the client.
     return this.tmux.capturePane(windowId, { visibleOnly: false, healthScore });
   }
 }

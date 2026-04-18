@@ -157,9 +157,9 @@ export class TmuxManager {
     const socketPath = this.getSocketPath(sessionId);
     const sessionName = this.getSessionName(sessionId);
 
-    if (!(await this.sessionExists(sessionId))) {
-      throw new TmuxError(`Session ${sessionId} not found`, 'SESSION_NOT_FOUND');
-    }
+    // Skip the sessionExists() pre-check — it spawns a subprocess (10-50ms)
+    // that eats into the resize drain window. The tmux command itself will
+    // fail if the session doesn't exist, and the error is caught below.
 
     // Atomic resize: resize both window and pane in a single tmux command sequence
     try {
