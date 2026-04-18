@@ -109,13 +109,13 @@ Shared (src/shared/)
 | **Team Cockpit** | `src/client/hooks/useTeamCockpit.ts` + `src/server/team/` |
 | **Output Pipeline** | `src/client/services/OutputPipelineManager.ts` |
 | **WebSocket Server** | `src/server/websocket/ConnectionManager.ts` |
-| **Protocol** | `src/shared/protocol.ts` + `teamProtocol.ts` + `musicProtocol.ts` |
+| **Protocol** | `src/shared/types.ts` + `teamProtocol.ts` + `musicProtocol.ts` |
 | **Terminal CSS** | `src/client/styles/terminal.css` + `grid-layout.css` |
 
 ## Common Tasks
 
 ### Add WebSocket Message Type
-1. Define type in `src/shared/protocol.ts`
+1. Define type in `src/shared/types.ts`
 2. Add validation in `src/server/websocket/messageSchema.ts`
 3. Add handler in `src/server/websocket/ConnectionManager.ts`
 4. Add client handler in `src/client/App.tsx` → `handleMessage`

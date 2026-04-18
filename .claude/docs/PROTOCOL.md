@@ -33,7 +33,8 @@
 ```
 
 ## Canonical Sources
-- `src/shared/protocol.ts` — Core protocol types
+- `src/shared/types.ts` — Core message types (ClientMessage, ServerMessage unions)
+- `src/shared/protocol.ts` — Binary WebSocket protocol constants
 - `src/shared/teamProtocol.ts` — Team cockpit protocol
 - `src/shared/todoProtocol.ts` — Todo sync protocol
 - `src/shared/musicProtocol.ts` — Music player protocol

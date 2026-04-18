@@ -17,6 +17,7 @@ export const SESSION_DEFAULTS = {
   timeout: 86400,
   maxSessions: 50,
   maxConnectionsPerSession: 5,
+  initialWindows: 4,
 };
 
 export const TERMINAL_DEFAULTS = {
@@ -30,11 +31,14 @@ export const TERMINAL_DEFAULTS = {
 export const RESIZE_CONSTANTS = {
   minCols: 10,
   minRows: 3,
-  serverDebounceMs: 250,
+  serverDedupMs: 50,         // Server dedup window for coalescing rapid resizes
   pendingClearMs: 1000,
   orientationSettleMs: 150,
   viewportDebounceMs: 200,
 };
+
+/** Maximum WebSocket message size accepted by the server (bytes) */
+export const MAX_MESSAGE_SIZE = 100_000;
 
 export const MOBILE_CONSTANTS = {
   breakpoint: 768,

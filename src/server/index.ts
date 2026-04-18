@@ -240,7 +240,7 @@ artifactWatcher.on('artifact', (artifact) => {
   connectionManager.broadcastToAll({
     type: 'canvas:artifact',
     artifact,
-  } as any);
+  });
 
   // Track in artifact history (in-memory, last 50)
   artifactManager.recordArtifact(artifact);

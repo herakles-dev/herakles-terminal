@@ -129,8 +129,8 @@ export interface ConnectionConfig {
 export type ClientMessageType =
   | 'auth'
   | 'input'
-  | 'resize'
   | 'ping'
+  | 'pong'
   | 'take-control'
   | 'session:resume'
   | 'session:create'
@@ -142,12 +142,30 @@ export type ClientMessageType =
   | 'window:layout'
   | 'window:subscribe'
   | 'window:rename'
-  | 'window:replay';
+  | 'window:replay'
+  | 'window:backpressure'
+  | 'todo:subscribe'
+  | 'todo:unsubscribe'
+  | 'context:subscribe'
+  | 'context:unsubscribe'
+  | 'music:subscribe'
+  | 'music:unsubscribe'
+  | 'music:sync'
+  | 'music:load'
+  | 'music:dock:update'
+  | 'artifact:subscribe'
+  | 'artifact:unsubscribe'
+  | 'team:subscribe'
+  | 'team:unsubscribe'
+  | 'stop:activate'
+  | 'stop:subscribe'
+  | 'stop:unsubscribe';
 
 export type ClientMessage =
   | { type: 'auth'; token: string; sessionId?: string }
   | { type: 'input'; data: string; windowId?: string }
   | { type: 'ping' }
+  | { type: 'pong' }
   | { type: 'take-control' }
   | { type: 'session:resume'; sessionId: string }
   | { type: 'session:create'; name?: string }
@@ -157,9 +175,26 @@ export type ClientMessage =
   | { type: 'window:send'; windowId: string; data: string }
   | { type: 'window:resize'; windowId: string; cols: number; rows: number; seq?: number }
   | { type: 'window:layout'; windowId: string; x: number; y: number; width: number; height: number }
-  | { type: 'window:subscribe'; windowId: string }
+  | { type: 'window:subscribe'; windowId: string; cols?: number; rows?: number }
   | { type: 'window:rename'; windowId: string; name: string }
-  | { type: 'window:replay'; windowId: string; afterSeq: number };
+  | { type: 'window:replay'; windowId: string; afterSeq: number }
+  | { type: 'window:backpressure'; windowId: string; throttle: boolean }
+  | { type: 'todo:subscribe'; windowId: string }
+  | { type: 'todo:unsubscribe'; windowId: string }
+  | { type: 'context:subscribe'; windowId: string; projectPath?: string }
+  | { type: 'context:unsubscribe'; windowId: string }
+  | { type: 'music:subscribe' }
+  | { type: 'music:unsubscribe' }
+  | { type: 'music:sync'; state: Record<string, unknown> }
+  | { type: 'music:load'; videoId: string; videoTitle?: string; thumbnailUrl?: string }
+  | { type: 'music:dock:update'; state: { position: string; size: { width: number; height: number }; collapsed: boolean } }
+  | { type: 'artifact:subscribe' }
+  | { type: 'artifact:unsubscribe' }
+  | { type: 'team:subscribe' }
+  | { type: 'team:unsubscribe' }
+  | { type: 'stop:activate'; youtubeUrl?: string; message?: string }
+  | { type: 'stop:subscribe' }
+  | { type: 'stop:unsubscribe' };
 
 export type ServerMessageType =
   | 'auth-success'
@@ -181,16 +216,32 @@ export type ServerMessageType =
   | 'window:resized'
   | 'window:list'
   | 'window:renamed'
+  | 'window:replay-response'
   | 'device:lock-acquired'
   | 'device:lock-released'
   | 'device:connected'
   | 'device:disconnected'
   | 'automation:triggered'
   | 'automation:completed'
-  | 'window:replay-response'
   | 'file:uploaded'
   | 'file:deleted'
   | 'artifact:history'
+  | 'canvas:artifact'
+  | 'todo:allSessions'
+  | 'context:sync'
+  | 'context:update'
+  | 'context:warning'
+  | 'music:dock:restore'
+  | 'team:sync'
+  | 'team:member:update'
+  | 'team:detected'
+  | 'team:dissolved'
+  | 'team:log'
+  | 'stop:sync'
+  | 'stop:warning'
+  | 'stop:lockout'
+  | 'stop:clear'
+  | 'stop:ack'
   | 'error';
 
 export interface ArtifactMetadata {
@@ -213,7 +264,7 @@ export type ServerMessage =
   | { type: 'control-changed'; activeDevice: string }
   | { type: 'viewer-joined'; deviceId: string }
   | { type: 'viewer-left'; deviceId: string }
-  | { type: 'session:created'; session: Session }
+  | { type: 'session:created'; session: Session; windows?: Window[] }
   | { type: 'session:resumed'; session: Session; windows: Window[] }
   | { type: 'window:created'; window: Window }
   | { type: 'window:closed'; windowId: string }
@@ -222,8 +273,8 @@ export type ServerMessage =
   | { type: 'window:restore'; windowId: string; data: string }
   | { type: 'window:resized'; windowId: string; cols: number; rows: number; seq?: number; recapture?: string }
   | { type: 'window:list'; windows: Window[] }
-  | { type: 'window:replay-response'; windowId: string; data: string; fromSeq: number; toSeq: number }
   | { type: 'window:renamed'; windowId: string; name: string; autoName?: string }
+  | { type: 'window:replay-response'; windowId: string; data: string; fromSeq: number; toSeq: number }
   | { type: 'device:lock-acquired'; windowId: string; deviceId: string; expiresAt: number }
   | { type: 'device:lock-released'; windowId: string }
   | { type: 'device:connected'; deviceId: string; deviceName: string }
@@ -233,6 +284,22 @@ export type ServerMessage =
   | { type: 'file:uploaded'; file: UploadedFile }
   | { type: 'file:deleted'; fileId: string; filename: string }
   | { type: 'artifact:history'; artifacts: ArtifactMetadata[] }
+  | { type: 'canvas:artifact'; artifact: { id: string; type: string; content: string; language?: string; title?: string; timestamp: number; sourceWindow?: string } }
+  | { type: 'todo:allSessions'; sessions: { windowId: string; todos: { id: string; status: string; content: string; priority?: number }[] }[] }
+  | { type: 'context:sync'; windowId: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number; contextLimit: number; percentUsed: number } | null }
+  | { type: 'context:update'; windowId: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number; contextLimit: number; percentUsed: number } }
+  | { type: 'context:warning'; windowId: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number; contextLimit: number; percentUsed: number }; threshold: number; message: string }
+  | { type: 'music:dock:restore'; state: { position: string; size: { width: number; height: number }; collapsed: boolean } }
+  | { type: 'team:sync'; teams: Record<string, unknown>[]; recentLogs?: Record<string, unknown>[] }
+  | { type: 'team:member:update'; teamName: string; member: Record<string, unknown> }
+  | { type: 'team:detected'; team: Record<string, unknown> }
+  | { type: 'team:dissolved'; team: Record<string, unknown> }
+  | { type: 'team:log'; teamName: string; events: Record<string, unknown>[] }
+  | { type: 'stop:sync'; phase: string; youtubeUrl?: string; message?: string; graceEndsAt?: number; lockoutEndsAt?: number }
+  | { type: 'stop:warning'; youtubeUrl?: string; message?: string; graceEndsAt: number }
+  | { type: 'stop:lockout'; lockoutEndsAt: number }
+  | { type: 'stop:clear' }
+  | { type: 'stop:ack'; phase: string }
   | { type: 'error'; code: string; message: string };
 
 export interface OptimizationStats {

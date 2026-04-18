@@ -120,7 +120,7 @@ Zeus Terminal is a mobile-first web terminal with multi-window support, tmux per
 |------|---------|
 | `constants.ts` | Shared defaults, `USE_GRID_LAYOUT` feature flag |
 | `types.ts` | TypeScript interfaces, `WindowType = 'terminal' \| 'media' \| 'agent'` |
-| `protocol.ts` | WebSocket message types |
+| `protocol.ts` | Binary WebSocket protocol constants |
 | `teamProtocol.ts` | Team cockpit protocol, TeamInfo/TeamMember types |
 | `todoProtocol.ts` | Todo sync messages |
 | `musicProtocol.ts` | Music player protocol |

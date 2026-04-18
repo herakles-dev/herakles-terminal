@@ -51,8 +51,8 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('window:resize'),
     windowId: uuidSchema,
-    cols: z.number().int().min(1).max(500),
-    rows: z.number().int().min(1).max(500),
+    cols: z.number().int().min(10).max(500),
+    rows: z.number().int().min(3).max(500),
     seq: z.number().int().optional(),
   }),
   z.object({
@@ -66,8 +66,8 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('window:subscribe'),
     windowId: uuidSchema,
-    cols: z.number().int().min(1).max(500).optional(),
-    rows: z.number().int().min(1).max(500).optional(),
+    cols: z.number().int().min(10).max(500).optional(),
+    rows: z.number().int().min(3).max(500).optional(),
   }),
   z.object({
     type: z.literal('window:rename'),

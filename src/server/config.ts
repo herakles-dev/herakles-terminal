@@ -16,6 +16,7 @@ export interface Config {
     maxSessions: number;
     maxConnectionsPerSession: number;
     maxWindowsPerSession: number;
+    initialWindows: number;
     defaultTimeout: number;
   };
   
@@ -101,6 +102,7 @@ export const config: Config = {
       10
     ),
     maxWindowsPerSession: parseInt(process.env.MAX_WINDOWS_PER_SESSION || '6', 10),
+    initialWindows: parseInt(process.env.INITIAL_WINDOWS || String(SESSION_DEFAULTS.initialWindows), 10),
     defaultTimeout: parseInt(process.env.DEFAULT_SESSION_TIMEOUT_HOURS || '168', 10),
   },
   
