@@ -799,6 +799,51 @@ describe('OutputPipelineManager', () => {
       flushTimers();
       expect(pipeline.getLastProcessedSeq('window-1')).toBe(15);
     });
+
+    it('Test 5 — advanceLastProcessedSeq (replay-response path): advances forward, no rewind', () => {
+      // Regression: window:replay-response writes directly to terminal and never
+      // goes through enqueue(), so seq tracking must be advanced out-of-band or
+      // a subsequent restore/recovery will re-request the same data.
+      const onFlush = vi.fn();
+      const onReplayRequest = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+      pipeline.setReplayRequestCallback(onReplayRequest);
+
+      // Baseline: client processed up to seq 50.
+      pipeline.enqueue('window-1', 'live', 50);
+      flushTimers();
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(50);
+
+      // Restore → replay covers seq 51..55. advanceLastProcessedSeq(toSeq=55)
+      // reflects the out-of-band catchup.
+      pipeline.advanceLastProcessedSeq('window-1', 55);
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(55);
+
+      // A stale advance below current must not rewind.
+      pipeline.advanceLastProcessedSeq('window-1', 42);
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(55);
+
+      // toSeq=0 (server had nothing to replay) is a no-op.
+      pipeline.advanceLastProcessedSeq('window-1', 0);
+      expect(pipeline.getLastProcessedSeq('window-1')).toBe(55);
+
+      // Subsequent setRestoreInProgress(false) replay requests now start from the
+      // post-replay seq, not the stale seq 50.
+      pipeline.setRestoreInProgress('window-1', true);
+      pipeline.setRestoreInProgress('window-1', false);
+      expect(onReplayRequest).toHaveBeenLastCalledWith('window-1', 55);
+    });
+
+    it('Test 6 — advanceLastProcessedSeq creates state for previously-unseen windows', () => {
+      // Edge case: replay-response may arrive before any live enqueue (e.g. client
+      // reconnects after a long idle period). The advance call must not throw.
+      const onFlush = vi.fn();
+      const pipeline = new OutputPipelineManager(onFlush);
+
+      expect(pipeline.getLastProcessedSeq('fresh-window')).toBe(0);
+      pipeline.advanceLastProcessedSeq('fresh-window', 42);
+      expect(pipeline.getLastProcessedSeq('fresh-window')).toBe(42);
+    });
   });
 
   describe('I-09: throttle window reset ordering (Fb-2 stale-mode latch)', () => {

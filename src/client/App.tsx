@@ -633,6 +633,12 @@ export default function App() {
           const handle = terminalRefs.current.get(msg.windowId);
           handle?.terminal?.write(filterOutputPreservingSpinners(msg.data));
         }
+        // Advance seq tracker to match what we just consumed. Without this, the
+        // next restore/recovery cycle would re-request the same data (duplicate
+        // output) or trip the ring-buffer gap detector (spurious full restore).
+        if (msg.toSeq > 0) {
+          outputPipelineRef.current?.advanceLastProcessedSeq(msg.windowId, msg.toSeq);
+        }
         break;
       }
 

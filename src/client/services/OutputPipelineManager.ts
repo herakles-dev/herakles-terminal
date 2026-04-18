@@ -594,6 +594,24 @@ export class OutputPipelineManager {
   }
 
   /**
+   * Advance lastProcessedSeq for a window after consuming out-of-band data
+   * (e.g. window:replay-response). Monotonic — only advances forward; never
+   * rewinds. Creates state if the window hasn't been seen yet (idempotent).
+   *
+   * Without this, replay-response data bypasses enqueue() so the seq tracker
+   * stays stale. A subsequent restore/recovery would then request replay from
+   * the same stale seq, and the server would either replay duplicates or
+   * (after eviction) report a spurious gap.
+   */
+  advanceLastProcessedSeq(windowId: string, toSeq: number): void {
+    if (toSeq <= 0) return;
+    const state = this.getOrCreateState(windowId);
+    if (toSeq > state.lastProcessedSeq) {
+      state.lastProcessedSeq = toSeq;
+    }
+  }
+
+  /**
    * Request replay of missed data from the server.
    */
   private requestReplay(windowId: string, afterSeq: number): void {
