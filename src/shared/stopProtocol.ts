@@ -3,11 +3,16 @@
 
 export type StopProtocolPhase = 'idle' | 'grace' | 'lockout';
 
-export const GRACE_DURATION_MS = 15 * 60 * 1000;      // 15 minutes to wrap up
-export const LOCKOUT_DURATION_MS = 1 * 60 * 60 * 1000; // 1 hour pause
+export const GRACE_DURATION_MS = 15 * 60 * 1000;       // 15 minutes to wrap up
+export const LOCKOUT_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hour pause
 
 // Authorized username that can trigger the protocol
 export const STOP_PROTOCOL_USER = 'riz';
+
+// Auto-activation schedule — lockout begins at 11:00 PM Chicago, so grace fires 15 min earlier.
+export const AUTO_ACTIVATE_TIMEZONE = 'America/Chicago';
+export const AUTO_ACTIVATE_HOUR = 22; // 10 PM local
+export const AUTO_ACTIVATE_MINUTE = 45; // :45 → lockout begins at 23:00
 
 // Default video if no link provided
 export const DEFAULT_STOP_VIDEO = 'https://www.youtube.com/watch?v=azjeQUt5rT0&list=RDazjeQUt5rT0&start_radio=1';
