@@ -17,7 +17,7 @@ services:
       - zeus-data:/app/data
       - zeus-tmux:/app/tmux
     networks:
-      - hercules-net
+      - hercules
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8096/api/health"]
       interval: 30s
@@ -39,5 +39,5 @@ volumes:
     driver: local
 
 networks:
-  hercules-net:
+  hercules:
     external: true
