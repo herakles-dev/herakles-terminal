@@ -70,9 +70,9 @@ describe('useHealthActions', () => {
 
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -93,9 +93,9 @@ describe('useHealthActions', () => {
 
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -118,9 +118,9 @@ describe('useHealthActions', () => {
 
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -143,9 +143,9 @@ describe('useHealthActions', () => {
 
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -170,9 +170,9 @@ describe('useHealthActions', () => {
 
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -196,9 +196,9 @@ describe('useHealthActions', () => {
     it('should show warning toast for warn_user recommendation', () => {
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -221,9 +221,9 @@ describe('useHealthActions', () => {
     it('should show error toast for reinit_required recommendation', () => {
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -248,9 +248,9 @@ describe('useHealthActions', () => {
 
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -286,9 +286,9 @@ describe('useHealthActions', () => {
     it('should not show toast for normal recommendation', () => {
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -311,9 +311,9 @@ describe('useHealthActions', () => {
     it('should set critical mode for health score < 40', () => {
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -333,9 +333,9 @@ describe('useHealthActions', () => {
     it('should set heavy mode for health score 40-59', () => {
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -355,9 +355,9 @@ describe('useHealthActions', () => {
     it('should set light mode for health score 60-79', () => {
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );
@@ -377,9 +377,9 @@ describe('useHealthActions', () => {
     it('should clear forced mode for health score >= 80', () => {
       const { result } = renderHook(() =>
         useHealthActions({
-          healthMonitor: null,
-          terminalRefs,
-          outputPipeline: mockOutputPipeline,
+          healthMonitor: { current: null },
+          terminalRefs: { current: terminalRefs },
+          outputPipelineRef: { current: mockOutputPipeline },
           toast: mockToast,
         })
       );

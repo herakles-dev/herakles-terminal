@@ -13,9 +13,9 @@ interface ToastContextValue {
 }
 
 export interface UseHealthActionsOptions {
-  healthMonitor: WebGLHealthMonitor | null;
-  terminalRefs: Map<string, TerminalCoreHandle>;
-  outputPipeline: OutputPipelineManager | null;
+  healthMonitor: { current: WebGLHealthMonitor | null };
+  terminalRefs: { current: Map<string, TerminalCoreHandle> };
+  outputPipelineRef: { current: OutputPipelineManager | null };
   toast: ToastContextValue;
 }
 
@@ -46,7 +46,7 @@ const TOAST_THROTTLE_MS = 60_000; // 60 seconds between same severity toasts
  * applyHealthActions(metrics);
  */
 export function useHealthActions(options: UseHealthActionsOptions) {
-  const { terminalRefs, outputPipeline, toast } = options;
+  const { terminalRefs, outputPipelineRef, toast } = options;
 
   const toastThrottleRef = useRef<ToastThrottle>({
     lastWarnTime: 0,
@@ -129,7 +129,7 @@ export function useHealthActions(options: UseHealthActionsOptions) {
 
     // Action 1: Adjust scrollback for all terminals
     const targetScrollback = getTargetScrollback(healthScore);
-    terminalRefs.forEach((handle, windowId) => {
+    terminalRefs.current?.forEach((handle, windowId) => {
       if (handle.terminal && handle.terminal.options.scrollback !== targetScrollback) {
         const oldScrollback = handle.terminal.options.scrollback;
         handle.terminal.options.scrollback = targetScrollback;
@@ -144,15 +144,17 @@ export function useHealthActions(options: UseHealthActionsOptions) {
       showHealthToast(recommendation, healthScore);
     }
 
-    // Action 3: Override throttle mode based on health
+    // Action 3: Override throttle mode based on health — read ref at call time
+    // so the pipeline instance is always current (not captured at render time)
     const forcedMode = getForcedThrottleMode(healthScore);
-    if (outputPipeline) {
-      outputPipeline.setForcedThrottleMode(forcedMode);
+    const pipeline = outputPipelineRef.current;
+    if (pipeline) {
+      pipeline.setForcedThrottleMode(forcedMode);
       if (forcedMode) {
         console.log(`[HealthActions] Forced throttle mode: ${forcedMode} (health: ${healthScore})`);
       }
     }
-  }, [getTargetScrollback, getForcedThrottleMode, showHealthToast, terminalRefs, outputPipeline]);
+  }, [getTargetScrollback, getForcedThrottleMode, showHealthToast, terminalRefs, outputPipelineRef]);
 
   return { applyHealthActions };
 }
