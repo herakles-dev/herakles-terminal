@@ -3,20 +3,14 @@
  *
  * Design:
  * - Tracks a `scrollOffset` (lines scrolled up from bottom, 0 = at bottom).
- * - Keeps a fixed-size pool of `viewportRows + 2*OVERSCAN` row divs that get
- *   recycled on scroll (no create/destroy per scroll step).
  * - On every render tick, callers call getViewportRange() to determine which
  *   slice of the xterm buffer ScreenBuffer should read.
  * - A virtual scrollbar DIV is rendered inside the container; its thumb position
  *   reflects the current scroll position relative to total scrollback length.
  * - Auto-scroll: if the terminal was at bottom before new output arrives, it
  *   snaps back to bottom automatically.
- *
- * Row recycling strategy:
- * - DomRenderer owns a rowPool (surplus rows beyond viewport). On scroll,
- *   VirtualScroller calls DomRenderer.recycleRows(shift) which rotates the
- *   rendered row elements and marks only the newly-exposed rows dirty.
- * - This avoids full re-renders on single-line scroll steps.
+ * - On scroll, onScrollChange fires → DomTerminalCore does a full re-render
+ *   at the new viewport offset.
  *
  * Integration with DomTerminalCore:
  *   1. Construct VirtualScroller(visibleContainer, renderer, { viewportRows, ... })
@@ -24,14 +18,6 @@
  *   3. Wire wheel events: visibleContainer.addEventListener('wheel', e => scroller.handleWheel(e))
  *   4. In performRender(): const range = scroller.getViewportRange(); then
  *      backBuf.readFromXTermBuffer(term.buffer.active, cols, rows, range.startLine)
- *      Note: ScreenBuffer.readFromXTermBuffer already uses buffer.viewportY as the
- *      start line — VirtualScroller overrides this by temporarily adjusting viewportY
- *      via term.scrollLines() OR by passing an explicit startLine (preferred).
- *
- * Buffer read integration:
- *   VirtualScroller does NOT call readFromXTermBuffer directly. Instead, it exposes
- *   getViewportRange() which DomTerminalCore passes to a new overload of
- *   readFromXTermBuffer that accepts an explicit startLine parameter.
  */
 
 import type { Terminal as XTerm } from '@xterm/xterm';
@@ -80,6 +66,7 @@ export interface ViewportRange {
 
 export class VirtualScroller {
   private container: HTMLElement;
+  private disposed = false;
 
   // How many lines we're scrolled up from the bottom (0 = at bottom)
   private scrollOffset = 0;
@@ -125,9 +112,6 @@ export class VirtualScroller {
   private boundTouchEnd: (e: TouchEvent) => void;
   private boundMouseEnter: () => void;
   private boundMouseLeave: () => void;
-
-  // Dirty rows from last scroll step (for recycling optimisation)
-  private dirtyFromScroll: Set<number> | null = null;
 
   // Callback to notify DomTerminalCore that scroll position changed and re-render is needed
   private onScrollChange: (() => void) | null = null;
@@ -202,6 +186,7 @@ export class VirtualScroller {
   scrollBy(deltaRows: number): void {
     if (deltaRows === 0) return;
 
+    const prevOffset = this.scrollOffset;
     const wasAtBottom = this._isAtBottom;
     const scrollableLines = Math.max(0, this.totalLines - this.viewportRows);
 
@@ -212,11 +197,32 @@ export class VirtualScroller {
 
     this._isAtBottom = this.scrollOffset === 0;
 
-    if (wasAtBottom !== this._isAtBottom || deltaRows !== 0) {
+    // Only fire if scroll state actually changed — avoids spurious full
+    // renders when scrolling past the top/bottom boundary.
+    if (prevOffset !== this.scrollOffset || wasAtBottom !== this._isAtBottom) {
       this.updateScrollbar();
-      this.computeRecycledDirtyRows(deltaRows);
       this.onScrollChange?.();
     }
+  }
+
+  /**
+   * Scroll the viewport so that `bufferLine` is visible, roughly centered.
+   * Used by SearchOverlay to jump to a match in scrollback.
+   */
+  scrollToBufferLine(bufferLine: number): void {
+    this.updateTotalLines();
+    const scrollableLines = Math.max(0, this.totalLines - this.viewportRows);
+    if (scrollableLines === 0) return;
+
+    // Target: place bufferLine near the center of the viewport
+    const targetStartLine = Math.max(0, bufferLine - Math.floor(this.viewportRows / 2));
+    const newOffset = Math.max(0, Math.min(scrollableLines, scrollableLines - targetStartLine));
+
+    if (newOffset === this.scrollOffset) return;
+    this.scrollOffset = newOffset;
+    this._isAtBottom = this.scrollOffset === 0;
+    this.updateScrollbar();
+    this.onScrollChange?.();
   }
 
   /**
@@ -226,7 +232,6 @@ export class VirtualScroller {
     if (this.scrollOffset === 0) return;
     this.scrollOffset = 0;
     this._isAtBottom = true;
-    this.dirtyFromScroll = null; // need full render
     this.updateScrollbar();
     this.onScrollChange?.();
   }
@@ -332,20 +337,11 @@ export class VirtualScroller {
   }
 
   /**
-   * If a scroll step produced a partial row shift, return the dirty rows
-   * that need re-rendering. Returns null if a full render is required.
-   * Consumed once per render cycle.
-   */
-  consumeDirtyRows(): Set<number> | null {
-    const dirty = this.dirtyFromScroll;
-    this.dirtyFromScroll = null;
-    return dirty;
-  }
-
-  /**
    * Lifecycle: detach events, remove DOM elements.
    */
   dispose(): void {
+    this.disposed = true;
+    this.onScrollChange = null;
     this.cancelMomentum();
     if (this.touchScrollbarHideTimer !== null) {
       clearTimeout(this.touchScrollbarHideTimer);
@@ -527,6 +523,7 @@ export class VirtualScroller {
     let velocity = initialVelocity;
 
     const step = () => {
+      if (this.disposed) return;
       // Decay velocity
       velocity *= TOUCH_MOMENTUM_DECAY;
 
@@ -584,8 +581,8 @@ export class VirtualScroller {
       Math.min(scrollableLines, this.scrollbarDragStartOffset - deltaLines)
     );
     this._isAtBottom = this.scrollOffset === 0;
-    this.dirtyFromScroll = null; // full render on drag
     this.updateScrollbar();
+    this.onScrollChange?.();
   }
 
   private onScrollbarPointerUp(e: PointerEvent): void {
@@ -652,34 +649,4 @@ export class VirtualScroller {
     this._isAtBottom = this.scrollOffset === 0;
   }
 
-  /**
-   * Compute which row indices need re-rendering after a scroll step.
-   * For small scrolls (|deltaRows| < viewportRows), only the newly exposed
-   * rows at the edge need to be re-rendered. For large jumps, mark all dirty.
-   *
-   * Note: DomRenderer row recycling (rotating the row element array) must happen
-   * before the ScreenBuffer read so that reused elements map to the right buffer rows.
-   * We store the dirty set here and let DomTerminalCore apply it.
-   */
-  private computeRecycledDirtyRows(deltaRows: number): void {
-    const absDelta = Math.abs(deltaRows);
-    if (absDelta >= this.viewportRows) {
-      // Full viewport jump — all rows are dirty
-      this.dirtyFromScroll = null;
-      return;
-    }
-
-    // Small scroll — only the newly exposed rows are dirty
-    const dirty = new Set<number>();
-    if (deltaRows > 0) {
-      // Scrolled up — new rows appear at the top
-      for (let i = 0; i < absDelta; i++) dirty.add(i);
-    } else {
-      // Scrolled down — new rows appear at the bottom
-      for (let i = this.viewportRows - absDelta; i < this.viewportRows; i++) {
-        dirty.add(i);
-      }
-    }
-    this.dirtyFromScroll = dirty;
-  }
 }

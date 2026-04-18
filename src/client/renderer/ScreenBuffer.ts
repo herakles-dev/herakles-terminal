@@ -69,6 +69,20 @@ export class CharPool {
 // StylePool — intern terminal cell styles to integer IDs
 // ---------------------------------------------------------------------------
 
+/**
+ * CellWidth — classifies cell display width for correct rendering of wide characters.
+ * Note: numeric values differ from Ink's screen.ts (Ink: Narrow=0, Wide=1, SpacerTail=2).
+ * Our values match xterm.js IBufferCell.getWidth() return values (0=continuation, 2=wide).
+ */
+export const enum CellWidth {
+  /** Continuation cell — second column of a wide character. Skip during rendering. */
+  CONTINUATION = 0,
+  /** Normal single-width character. */
+  NARROW = 1,
+  /** Wide character (CJK, emoji) — occupies 2 columns. */
+  WIDE = 2,
+}
+
 /** Flags packed into a single byte */
 export const enum StyleFlags {
   NONE       = 0,
@@ -260,9 +274,9 @@ export class ScreenBuffer {
 
         if (cell) {
           const chars = cell.getChars();
-          const width = cell.getWidth();
+          const cellWidth = cell.getWidth() as CellWidth;
 
-          if (width === 0) {
+          if (cellWidth === CellWidth.CONTINUATION) {
             // Continuation cell of a wide char — DomRenderer skips these
             charId = CharPool.CONTINUATION_ID;
             styleId = this.stylePool.defaultStyleId;
@@ -280,7 +294,7 @@ export class ScreenBuffer {
         const offset = rowOffset + x * WORDS_PER_CELL;
         this.cells[offset] = charId;
         this.cells[offset + 1] = styleId;
-        rowHash = (Math.imul(rowHash, 2654435769) ^ (charId * 31 + styleId)) | 0;
+        rowHash = (Math.imul(rowHash, 0x9e3779b9) ^ Math.imul(charId, 0x517cc1b7) ^ styleId) | 0;
       }
 
       this.rowHashes[y] = rowHash;
@@ -297,7 +311,7 @@ export class ScreenBuffer {
   diff(prev: ScreenBuffer, startRow?: number, endRow?: number): Set<number> {
     const dirty = new Set<number>();
     const from = startRow ?? 0;
-    const to = endRow ?? Math.min(this.rows, prev.rows) - 1;
+    const to = Math.min(endRow ?? (this.rows - 1), this.rows - 1, prev.rows - 1);
 
     // If dimensions changed, everything is dirty
     if (this.cols !== prev.cols || this.rows !== prev.rows) {

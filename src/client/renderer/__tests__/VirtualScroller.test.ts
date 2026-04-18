@@ -321,67 +321,6 @@ describe('VirtualScroller', () => {
   });
 
   // -------------------------------------------------------------------------
-  // consumeDirtyRows
-  // -------------------------------------------------------------------------
-
-  describe('consumeDirtyRows', () => {
-    it('returns null before any scroll', () => {
-      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
-      track(container);
-      expect(scroller.consumeDirtyRows()).toBeNull();
-      scroller.dispose();
-    });
-
-    it('returns dirty set for a small upward scroll', () => {
-      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
-      track(container);
-      scroller.scrollBy(3); // scroll up 3 rows
-      const dirty = scroller.consumeDirtyRows();
-      // top 3 rows (0, 1, 2) are newly exposed
-      expect(dirty).not.toBeNull();
-      expect(dirty!.has(0)).toBe(true);
-      expect(dirty!.has(1)).toBe(true);
-      expect(dirty!.has(2)).toBe(true);
-      expect(dirty!.has(3)).toBe(false);
-      scroller.dispose();
-    });
-
-    it('returns dirty set for a small downward scroll', () => {
-      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
-      track(container);
-      scroller.scrollBy(10); // first scroll up
-      scroller.consumeDirtyRows(); // clear
-      scroller.scrollBy(-3); // scroll down 3
-      const dirty = scroller.consumeDirtyRows();
-      // bottom 3 rows (21, 22, 23) are newly exposed
-      expect(dirty).not.toBeNull();
-      expect(dirty!.has(21)).toBe(true);
-      expect(dirty!.has(22)).toBe(true);
-      expect(dirty!.has(23)).toBe(true);
-      expect(dirty!.has(20)).toBe(false);
-      scroller.dispose();
-    });
-
-    it('returns null for a full-viewport jump', () => {
-      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 5000 });
-      track(container);
-      scroller.scrollBy(500); // more than viewportRows — full jump
-      const dirty = scroller.consumeDirtyRows();
-      expect(dirty).toBeNull();
-      scroller.dispose();
-    });
-
-    it('is consumed once — returns null on second call', () => {
-      const { scroller, container } = makeScroller({ rows: 24, bufferLength: 100 });
-      track(container);
-      scroller.scrollBy(3);
-      scroller.consumeDirtyRows();
-      expect(scroller.consumeDirtyRows()).toBeNull();
-      scroller.dispose();
-    });
-  });
-
-  // -------------------------------------------------------------------------
   // handleWheel
   // -------------------------------------------------------------------------
 

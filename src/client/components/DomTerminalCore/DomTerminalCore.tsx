@@ -488,14 +488,15 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
           }
 
           if (dims.cols !== t.cols || dims.rows !== t.rows) {
-            // Update everything BEFORE t.resize() — xterm fires onRender
-            // synchronously inside resize(), and the render path needs
-            // correct buffer dimensions, row elements, and viewport rows.
-            virtualScrollerRef.current?.setViewportRows(dims.rows);
+            // Ordering matters (I-02):
+            // 1. Resize xterm first — buffer reflow happens synchronously, fires onRender.
+            // 2. setViewportRows reads the NEW buffer length via updateTotalLines.
+            // 3. ensureRows is NOT called here — performRender() handles it atomically inside RAF
+            //    to avoid a 1-frame gap of empty row divs (was: Fa-2 race).
             frontBufferRef.current?.resize(dims.cols, dims.rows);
             backBufferRef.current?.resize(dims.cols, dims.rows);
-            rendererRef.current?.ensureRows(dims.rows);
             t.resize(dims.cols, dims.rows);
+            virtualScrollerRef.current?.setViewportRows(dims.rows);
             // RAF-batched full render (coalesces with onRender from term.resize)
             scheduleFullRender();
             onResizeRef.current?.(dims.cols, dims.rows);
@@ -600,14 +601,20 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
 
       const dims = calculateTerminalDimensions(outerRef.current, fontFamily, fontSize, PADDING);
       if (dims.cols !== termRef.current.cols || dims.rows !== termRef.current.rows) {
-        virtualScrollerRef.current?.setViewportRows(dims.rows);
-        termRef.current.resize(dims.cols, dims.rows);
+        // Ordering matters (I-02 / F1): t.resize() must run before setViewportRows so
+        // VirtualScroller.updateTotalLines() reads the NEW buffer length. Matches applyResize.
         frontBufferRef.current?.resize(dims.cols, dims.rows);
         backBufferRef.current?.resize(dims.cols, dims.rows);
-        rendererRef.current?.ensureRows(dims.rows);
+        termRef.current.resize(dims.cols, dims.rows);
+        virtualScrollerRef.current?.setViewportRows(dims.rows);
+        // No ensureRows here — performRender() handles it atomically inside RAF (I-02 / F1)
         dirtyFullRef.current = true;
         scheduleRenderRef.current?.();
         onResizeRef.current?.(dims.cols, dims.rows);
+      } else {
+        // Same cols/rows but charWidth/lineHeight changed — cursor position needs re-render (I-12 / Fa-3)
+        dirtyFullRef.current = true;
+        scheduleRenderRef.current?.();
       }
     }, [fontSize]);
 
@@ -645,11 +652,13 @@ export const DomTerminalCore = forwardRef<TerminalCoreHandle, TerminalCoreProps>
             const fontFamily = TERMINAL_DEFAULTS.fontFamily;
             const dims = calculateTerminalDimensions(outerRef.current, fontFamily, fontSize, PADDING);
             if (dims.cols !== termRef.current.cols || dims.rows !== termRef.current.rows) {
-              virtualScrollerRef.current?.setViewportRows(dims.rows);
-              termRef.current.resize(dims.cols, dims.rows);
+              // Ordering matters (I-02 / F1): t.resize() must run before setViewportRows so
+              // VirtualScroller.updateTotalLines() reads the NEW buffer length. Matches applyResize.
               frontBufferRef.current?.resize(dims.cols, dims.rows);
               backBufferRef.current?.resize(dims.cols, dims.rows);
-              rendererRef.current?.ensureRows(dims.rows);
+              termRef.current.resize(dims.cols, dims.rows);
+              virtualScrollerRef.current?.setViewportRows(dims.rows);
+              // No ensureRows here — performRender() handles it atomically inside RAF (I-02 / F1)
               dirtyFullRef.current = true;
               scheduleRenderRef.current?.();
               onResizeRef.current?.(dims.cols, dims.rows);

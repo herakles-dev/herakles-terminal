@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
-import { RESIZE_CONSTANTS } from '@shared/constants';
+import { RESIZE_CONSTANTS, USE_DOM_RENDERER } from '@shared/constants';
 
 /** @deprecated Use GridResizeTarget from useGridResize.ts instead */
 export interface ResizeTarget {
@@ -473,6 +473,11 @@ export function useResizeCoordinator(options?: ResizeCoordinatorOptions) {
   }, [triggerResize]);
 
   useEffect(() => {
+    // DOM renderer handles all resizing via its own ResizeObserver in DomTerminalCore.
+    // Skip window resize/orientationchange listeners — they'd fire triggerResize which
+    // has no targets registered and just wastes cycles.
+    if (USE_DOM_RENDERER) return;
+
     window.addEventListener('resize', handleBrowserResize, { passive: true });
     window.addEventListener('orientationchange', handleBrowserResize, { passive: true });
 

@@ -64,11 +64,18 @@ export function measureCharDimensions(
 
   container.appendChild(span);
 
-  // Use offsetWidth/offsetHeight (integer) to match xterm.js CharSizeService
-  const charWidth = span.offsetWidth / MEASURE_REPEAT;
+  // Math.round matches xterm.js CharSizeService — ensures integer charWidth
+  // to prevent sub-pixel drift across columns (e.g. cursor at col 80 off by 1px)
+  const charWidth = Math.round(span.offsetWidth / MEASURE_REPEAT);
   const lineHeight = span.offsetHeight;
 
   container.removeChild(span);
+
+  // Guard: if measurement failed (element not in live layout, CSS not loaded),
+  // return safe defaults without caching to prevent division-by-zero downstream
+  if (charWidth <= 0 || lineHeight <= 0) {
+    return { charWidth: 8, lineHeight: 16 };
+  }
 
   const dims = { charWidth, lineHeight };
   dimensionCache.set(key, dims);

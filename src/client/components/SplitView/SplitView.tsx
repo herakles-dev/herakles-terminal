@@ -1023,7 +1023,7 @@ export default function SplitView({
         <div
           key={window.id}
           ref={windowContainerRefCallback(window.id)}
-          className={`absolute flex flex-col bg-gradient-to-b from-[#111118] to-[#0c0c14] border rounded-xl overflow-hidden transition-[border-color,box-shadow,outline,ring] duration-200 ${
+          className={`absolute flex flex-col bg-black border rounded-xl overflow-hidden transition-[border-color,box-shadow,outline,ring] duration-200 ${
             isZoomed
               ? 'border-[#00d4ff]/60 shadow-[0_0_32px_rgba(0,212,255,0.15)] ring-1 ring-[#00d4ff]/20'
               : dropTarget === window.id

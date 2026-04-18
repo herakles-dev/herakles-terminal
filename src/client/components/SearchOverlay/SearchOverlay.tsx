@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Terminal as XTerm } from '@xterm/xterm';
 import type { DomRenderer, HighlightRange } from '../../renderer/DomRenderer.js';
+import type { VirtualScroller } from '../../renderer/VirtualScroller.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,6 +34,8 @@ export interface SearchOverlayProps {
   terminalRef: React.RefObject<XTerm | null>;
   /** DomRenderer instance for highlight integration. May be null before init. */
   rendererRef: React.RefObject<DomRenderer | null>;
+  /** VirtualScroller for viewport position and scroll-to-match. May be null before init. */
+  scrollerRef: React.RefObject<VirtualScroller | null>;
   onClose: () => void;
   visible: boolean;
 }
@@ -55,6 +58,43 @@ interface SearchOptions {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Build a mapping from JS string code-unit index (as used by RegExp.exec()
+ * m.index) to buffer column index. This handles two divergences between
+ * xterm buffer columns and JS string positions:
+ *
+ *   1. Wide characters (CJK): occupy 2 buffer columns but translateToString()
+ *      produces 1 string character (1 code unit). The continuation cell
+ *      (width=0) has no corresponding string position.
+ *
+ *   2. Surrogate pairs (emoji): occupy 1 or 2 buffer columns but produce
+ *      2 JS code units. RegExp indices count in code units, so the map
+ *      must emit one entry per code unit.
+ *
+ * Returns an array where map[codeUnitIndex] = bufferColumn.
+ * An extra sentinel at map[string.length] = cols allows computing exclusive
+ * end columns directly: endCol = map[stringEnd].
+ */
+function buildStringToBufColMap(line: import('@xterm/xterm').IBufferLine, cols: number): number[] {
+  const map: number[] = [];
+  for (let col = 0; col < cols; col++) {
+    const cell = line.getCell(col);
+    if (!cell) break;
+    const width = cell.getWidth();
+    // Width 0 = continuation cell (second half of wide char) — no string char
+    if (width === 0) continue;
+    // Emit one map entry per JS code unit. Most characters produce 1 code unit,
+    // but emoji/astral plane characters produce 2 (surrogate pairs).
+    const chars = cell.getChars();
+    const codeUnits = chars.length || 1; // empty cell → 1 space in translateToString
+    for (let u = 0; u < codeUnits; u++) {
+      map.push(col);
+    }
+  }
+  map.push(cols); // sentinel for end-of-line
+  return map;
 }
 
 function searchBuffer(
@@ -85,11 +125,23 @@ function searchBuffer(
 
     pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
+    // Lazily built — only needed when this line has matches
+    let strToBuf: number[] | null = null;
+
     while ((m = pattern.exec(text)) !== null) {
-      const start = m.index;
-      const end = start + m[0].length;
-      if (end > start) {
-        matches.push({ line: y, startCol: start, endCol: end });
+      const strStart = m.index;
+      const strEnd = strStart + m[0].length;
+      if (strEnd > strStart) {
+        // Convert string code-unit indices to buffer column indices for
+        // correct highlight positioning with wide chars and emoji.
+        if (!strToBuf) strToBuf = buildStringToBufColMap(line, term.cols);
+        // Clamp to the map's sentinel (last entry = cols) rather than
+        // falling back to raw string indices, which would reintroduce
+        // column drift when wide chars or surrogate pairs are present.
+        const mapLen = strToBuf.length;
+        const startCol = strToBuf[Math.min(strStart, mapLen - 1)]!;
+        const endCol = strToBuf[Math.min(strEnd, mapLen - 1)]!;
+        matches.push({ line: y, startCol, endCol });
       }
       // Prevent infinite loop on zero-length match
       if (m[0].length === 0) pattern.lastIndex++;
@@ -105,7 +157,7 @@ function searchBuffer(
 
 const DEBOUNCE_MS = 200;
 
-export function SearchOverlay({ terminalRef, rendererRef, visible, onClose }: SearchOverlayProps) {
+export function SearchOverlay({ terminalRef, rendererRef, scrollerRef, visible, onClose }: SearchOverlayProps) {
   const [query, setQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [useRegex, setUseRegex] = useState(false);
@@ -136,22 +188,45 @@ export function SearchOverlay({ terminalRef, rendererRef, visible, onClose }: Se
   }, [visible, rendererRef]);
 
   // ---------------------------------------------------------------------------
-  // Apply highlights whenever matches or activeIndex changes
+  // Apply highlights whenever matches or activeIndex changes.
+  // Translates buffer-absolute line indices (from searchBuffer) to viewport-
+  // relative indices (expected by DomRenderer.setHighlights).
+  // Also scrolls the viewport to ensure the active match is visible.
   // ---------------------------------------------------------------------------
   const applyHighlights = useCallback(
     (matchList: SearchMatch[], active: number) => {
       const renderer = rendererRef.current;
+      const scroller = scrollerRef.current;
       if (!renderer) return;
 
-      const highlights: HighlightRange[] = matchList.map((m, i) => ({
-        line: m.line,
-        startCol: m.startCol,
-        endCol: m.endCol,
-        active: i === active,
-      }));
+      // Scroll to the active match so it's visible in the viewport
+      const activeMatch = matchList[active];
+      if (activeMatch && scroller) {
+        scroller.scrollToBufferLine(activeMatch.line);
+      }
+
+      // Get the current viewport range AFTER scrolling
+      const range = scroller?.getViewportRange();
+      const startLine = range?.startLine ?? 0;
+      const endLine = range?.endLine ?? Infinity;
+
+      // Only emit highlights for matches visible in the current viewport,
+      // translated from buffer-absolute to viewport-relative row indices.
+      const highlights: HighlightRange[] = [];
+      for (let i = 0; i < matchList.length; i++) {
+        const m = matchList[i]!;
+        if (m.line >= startLine && m.line < endLine) {
+          highlights.push({
+            line: m.line - startLine,
+            startCol: m.startCol,
+            endCol: m.endCol,
+            active: i === active,
+          });
+        }
+      }
       renderer.setHighlights(highlights);
     },
-    [rendererRef],
+    [rendererRef, scrollerRef],
   );
 
   // ---------------------------------------------------------------------------

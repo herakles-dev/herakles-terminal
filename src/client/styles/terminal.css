@@ -114,7 +114,7 @@ body {
   min-height: 0;
   width: 100%;
   overflow: hidden;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-primary);
   display: flex;
   flex-direction: column;
   contain: style;
@@ -129,7 +129,7 @@ body {
      would double-count: outer.getBoundingClientRect() already reflects the
      parent's content area, then calculateTerminalDimensions subtracts PADDING
      again for the viewport inset. */
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-primary);
   touch-action: pan-y pinch-zoom;
   display: flex;
   flex-direction: column;
@@ -188,7 +188,7 @@ body {
 }
 
 .terminal-container .xterm-viewport {
-  background-color: var(--bg-secondary) !important;
+  background-color: var(--bg-primary) !important;
   overflow-y: hidden !important;
   touch-action: pan-y;
 }
@@ -215,7 +215,7 @@ body {
 }
 
 .terminal-container .xterm-screen {
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-primary);
 }
 
 .terminal-container .xterm-rows {
@@ -244,8 +244,6 @@ body {
   gap: 4px;
   padding: 6px 10px;
   background: linear-gradient(180deg, rgba(12, 12, 20, 0.98) 0%, rgba(7, 7, 12, 0.98) 100%);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--glass-border);
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 var(--glass-highlight);
   overflow-x: auto;
@@ -403,8 +401,6 @@ body {
   padding: 4px 10px;
   font-size: 13px;
   background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border-radius: 12px;
   border: 1px solid rgba(39, 39, 42, 0.5);
   z-index: 100;
@@ -740,8 +736,6 @@ select:focus-visible {
   bottom: 44px;
   width: 130px;
   background: linear-gradient(180deg, rgba(12, 12, 20, 0.95) 0%, rgba(7, 7, 12, 0.98) 100%);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border-left: 1px solid var(--glass-border);
   z-index: 45;
   cursor: pointer;
@@ -928,8 +922,6 @@ select:focus-visible {
 /* File Drop Zone Overlay */
 .file-drop-zone-overlay {
   background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border: 2px dashed var(--accent-cyan);
   animation: file-drop-zone-pulse 1.5s ease-in-out infinite;
 }
@@ -985,8 +977,6 @@ select:focus-visible {
   bottom: 0;
   z-index: 101;
   background: rgba(10, 10, 15, 0.95);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-right: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
   animation: todo-drawer-slide-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);

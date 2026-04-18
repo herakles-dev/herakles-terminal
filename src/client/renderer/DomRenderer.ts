@@ -198,11 +198,29 @@ export class DomRenderer {
     let runStyleId = -1;
     let runChars = '';
 
+    // Only build the buffer-column → HTML-column mapping when this row has
+    // highlights. The Int32Array allocation + tracking is unnecessary for the
+    // vast majority of rows that have no search matches.
+    const rowHighlights = this.highlights.get(y);
+    const needsMapping = rowHighlights !== undefined && rowHighlights.length > 0;
+    let bufColToHtmlCol: Int32Array | null = null;
+    let htmlColCount = 0;
+
+    if (needsMapping) {
+      bufColToHtmlCol = new Int32Array(buffer.cols);
+    }
+
     for (let x = 0; x < buffer.cols; x++) {
       const charId = buffer.getCharId(x, y);
 
       // Skip wide-char continuation cells — the wide char already spans 2 columns
-      if (charId === CharPool.CONTINUATION_ID) continue;
+      if (charId === CharPool.CONTINUATION_ID) {
+        if (bufColToHtmlCol) bufColToHtmlCol[x] = -1;
+        continue;
+      }
+
+      if (bufColToHtmlCol) bufColToHtmlCol[x] = htmlColCount;
+      htmlColCount++;
 
       const styleId = buffer.getStyleId(x, y);
       const char = buffer.charPool.get(charId);
@@ -228,9 +246,8 @@ export class DomRenderer {
 
     // Apply search-highlight overlay if this row has active match ranges.
     // Post-pass on the final HTML string — the style-coalescing above is untouched.
-    const rowHighlights = this.highlights.get(y);
-    if (rowHighlights && rowHighlights.length > 0) {
-      html = this.injectHighlightSpans(html, rowHighlights, buffer.cols);
+    if (needsMapping && bufColToHtmlCol) {
+      html = this.injectHighlightSpans(html, rowHighlights!, bufColToHtmlCol, htmlColCount);
     }
 
     rowEl.innerHTML = html;
@@ -282,21 +299,27 @@ export class DomRenderer {
   /**
    * Inject <span class="search-match"> / <span class="search-match-active">
    * wrappers into a row's HTML string at the character column boundaries given
-   * by `ranges`. We walk the HTML character-by-character tracking tag vs. text
-   * context. Text characters increment a logical column counter; column ranges
-   * map directly to that counter. HTML entities (&amp; etc.) count as 1 column.
+   * by `ranges`. Ranges use buffer column indices; bufColToHtmlCol maps those
+   * to HTML text character positions (skipping CONTINUATION cells for wide chars).
+   * We walk the HTML character-by-character tracking tag vs. text context.
+   * HTML entities (&amp; etc.) count as 1 HTML column.
    */
   private injectHighlightSpans(
     html: string,
     ranges: HighlightRange[],
-    cols: number,
+    bufColToHtmlCol: Int32Array,
+    htmlCols: number,
   ): string {
-    // Build a flat per-column array of CSS class names (null = unhighlighted).
-    const colClass = new Array<string | null>(cols).fill(null);
+    // Build a flat per-HTML-column array of CSS class names (null = unhighlighted).
+    // Translate buffer-column ranges to HTML-column ranges via the mapping.
+    const colClass = new Array<string | null>(htmlCols).fill(null);
     for (const r of ranges) {
       const cls = r.active ? 'search-match-active' : 'search-match';
-      for (let c = r.startCol; c < r.endCol && c < cols; c++) {
-        colClass[c] = cls;
+      for (let bufC = r.startCol; bufC < r.endCol && bufC < bufColToHtmlCol.length; bufC++) {
+        const htmlC = bufColToHtmlCol[bufC]!;
+        if (htmlC >= 0 && htmlC < htmlCols) {
+          colClass[htmlC] = cls;
+        }
       }
     }
 
@@ -329,7 +352,7 @@ export class DomRenderer {
       // Text character (possibly inside an HTML entity).
       if (ch === '&') inEntity = true;
 
-      const wantedCls = col < cols ? (colClass[col] ?? null) : null;
+      const wantedCls = col < htmlCols ? (colClass[col] ?? null) : null;
 
       if (wantedCls !== currentHighlightCls) {
         if (currentHighlightCls !== null) result += '</span>';
@@ -389,7 +412,9 @@ export class DomRenderer {
     if (bgCss) parts.push(`background-color:${bgCss}`);
 
     if (style.flags & StyleFlags.BOLD) parts.push('font-weight:bold');
-    if (style.flags & StyleFlags.DIM) parts.push('opacity:0.5;filter:brightness(0.75)');
+    // DIM uses opacity only — filter:brightness promotes a stacking context per cell,
+    // causing GPU layer proliferation during Ink redraws (see issues.md I-10 / Fe-2).
+    if (style.flags & StyleFlags.DIM) parts.push('opacity:0.5');
     if (style.flags & StyleFlags.ITALIC) parts.push('font-style:italic');
     if (style.flags & StyleFlags.BLINK) parts.push('animation:dom-term-text-blink 1s step-end infinite');
 
