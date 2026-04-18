@@ -14,11 +14,16 @@ import {
   LOCKOUT_DURATION_MS,
   STOP_PROTOCOL_USER,
   DEFAULT_STOP_VIDEO,
+  AUTO_ACTIVATE_TIMEZONE,
+  AUTO_ACTIVATE_HOUR,
+  AUTO_ACTIVATE_MINUTE,
 } from '../../shared/stopProtocol.js';
 import { logger } from '../utils/logger.js';
 
 export class StopProtocolManager extends EventEmitter {
   private subscribers: Set<WebSocket> = new Set();
+  /** One close handler per ws — prevents listener leak on resubscribe. */
+  private wsCloseHandlers: WeakMap<WebSocket, () => void> = new WeakMap();
   private phase: StopProtocolPhase = 'idle';
   private youtubeUrl?: string;
   private message?: string;
@@ -26,10 +31,12 @@ export class StopProtocolManager extends EventEmitter {
   private lockoutEndsAt?: number;
   private graceTimer: NodeJS.Timeout | null = null;
   private lockoutTimer: NodeJS.Timeout | null = null;
+  private autoActivateTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     super();
     logger.info('StopProtocolManager initialized');
+    this.scheduleNextAutoActivation();
   }
 
   subscribe(ws: WebSocket): void {
@@ -46,9 +53,16 @@ export class StopProtocolManager extends EventEmitter {
     };
     this.send(ws, sync);
 
-    ws.on('close', () => {
-      this.subscribers.delete(ws);
-    });
+    // Attach close handler exactly once per ws.
+    if (!this.wsCloseHandlers.has(ws)) {
+      const handleClose = (): void => {
+        this.subscribers.delete(ws);
+        this.wsCloseHandlers.delete(ws);
+        ws.removeListener('close', handleClose);
+      };
+      this.wsCloseHandlers.set(ws, handleClose);
+      ws.on('close', handleClose);
+    }
   }
 
   unsubscribe(ws: WebSocket): void {
@@ -129,6 +143,63 @@ export class StopProtocolManager extends EventEmitter {
     this.broadcast(clearMsg);
 
     logger.info('StopProtocol: CLEARED — back to idle');
+    this.scheduleNextAutoActivation();
+  }
+
+  /**
+   * Schedule next automatic activation at AUTO_ACTIVATE_HOUR:AUTO_ACTIVATE_MINUTE
+   * in AUTO_ACTIVATE_TIMEZONE. DST-safe via Intl.DateTimeFormat.
+   */
+  private scheduleNextAutoActivation(): void {
+    if (this.autoActivateTimer) {
+      clearTimeout(this.autoActivateTimer);
+      this.autoActivateTimer = null;
+    }
+
+    const delayMs = this.msUntilNextAutoActivation();
+    const fireAt = new Date(Date.now() + delayMs);
+    this.autoActivateTimer = setTimeout(() => {
+      this.autoActivateTimer = null;
+      this.autoActivate();
+    }, delayMs);
+
+    logger.info(
+      `StopProtocol: next auto-activation in ${Math.round(delayMs / 60000)} min ` +
+      `(${fireAt.toISOString()}) — lockout begins ~${AUTO_ACTIVATE_HOUR + 1}:00 ${AUTO_ACTIVATE_TIMEZONE}`,
+    );
+  }
+
+  private msUntilNextAutoActivation(): number {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: AUTO_ACTIVATE_TIMEZONE,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date());
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? '0');
+    // Intl can return "24" for hour in hour12:false — normalize to 0.
+    const hour = get('hour') % 24;
+    const minute = get('minute');
+    const second = get('second');
+
+    const nowSec = hour * 3600 + minute * 60 + second;
+    const targetSec = AUTO_ACTIVATE_HOUR * 3600 + AUTO_ACTIVATE_MINUTE * 60;
+    let deltaSec = targetSec - nowSec;
+    if (deltaSec <= 0) deltaSec += 24 * 3600;
+    return deltaSec * 1000;
+  }
+
+  private autoActivate(): void {
+    if (this.phase !== 'idle') {
+      logger.info(`StopProtocol: auto-activation skipped — phase is ${this.phase}`);
+      this.scheduleNextAutoActivation();
+      return;
+    }
+    logger.info('StopProtocol: AUTO-ACTIVATED on schedule');
+    this.youtubeUrl = DEFAULT_STOP_VIDEO;
+    this.message = undefined;
+    this.enterGrace();
   }
 
   getPhase(): StopProtocolPhase {
@@ -161,6 +232,7 @@ export class StopProtocolManager extends EventEmitter {
   destroy(): void {
     if (this.graceTimer) clearTimeout(this.graceTimer);
     if (this.lockoutTimer) clearTimeout(this.lockoutTimer);
+    if (this.autoActivateTimer) clearTimeout(this.autoActivateTimer);
     this.subscribers.clear();
   }
 }

@@ -17,6 +17,8 @@ interface MusicSubscription {
 export class MusicManager {
   private store: MusicPlayerStore;
   private subscribers: Set<MusicSubscription> = new Set();
+  /** One close handler per ws — guards against duplicate listener attachment. */
+  private wsCloseHandlers: WeakMap<WebSocket, () => void> = new WeakMap();
 
   constructor(store: MusicPlayerStore) {
     this.store = store;
@@ -27,7 +29,17 @@ export class MusicManager {
    * Immediately sends the persisted dock state on subscribe.
    */
   subscribe(ws: WebSocket, userEmail: string): void {
-    this.subscribers.add({ ws, userEmail });
+    // Dedup: a single ws should only have one subscription row.
+    let alreadySubscribed = false;
+    for (const sub of this.subscribers) {
+      if (sub.ws === ws) {
+        alreadySubscribed = true;
+        break;
+      }
+    }
+    if (!alreadySubscribed) {
+      this.subscribers.add({ ws, userEmail });
+    }
 
     // Send persisted dock state on connection
     const dockState = this.store.getDockState(userEmail);
@@ -36,12 +48,16 @@ export class MusicManager {
       state: dockState,
     });
 
-    // Clean up on close
-    const handleClose = (): void => {
-      this.unsubscribe(ws);
-      ws.removeListener('close', handleClose);
-    };
-    ws.on('close', handleClose);
+    // Attach close handler exactly once per ws.
+    if (!this.wsCloseHandlers.has(ws)) {
+      const handleClose = (): void => {
+        this.unsubscribe(ws);
+        this.wsCloseHandlers.delete(ws);
+        ws.removeListener('close', handleClose);
+      };
+      this.wsCloseHandlers.set(ws, handleClose);
+      ws.on('close', handleClose);
+    }
   }
 
   /**

@@ -21,6 +21,8 @@ interface ArtifactSubscription {
 export class ArtifactManager {
   private history: ArtifactMetadata[] = [];
   private subscribers: Set<ArtifactSubscription> = new Set();
+  /** One close handler per ws — guards against duplicate listener attachment. */
+  private wsCloseHandlers: WeakMap<WebSocket, () => void> = new WeakMap();
 
   /**
    * Record a new artifact in history.
@@ -52,18 +54,31 @@ export class ArtifactManager {
    * Immediately sends the current history on subscribe.
    */
   subscribe(ws: WebSocket, userEmail: string): void {
-    const sub: ArtifactSubscription = { ws, userEmail };
-    this.subscribers.add(sub);
+    // Dedup: a single ws should only have one subscription row.
+    let alreadySubscribed = false;
+    for (const existing of this.subscribers) {
+      if (existing.ws === ws) {
+        alreadySubscribed = true;
+        break;
+      }
+    }
+    if (!alreadySubscribed) {
+      this.subscribers.add({ ws, userEmail });
+    }
 
     // Send current history immediately
     this.sendHistory(ws);
 
-    // Clean up on close
-    const handleClose = (): void => {
-      this.subscribers.delete(sub);
-      ws.removeListener('close', handleClose);
-    };
-    ws.on('close', handleClose);
+    // Attach close handler exactly once per ws.
+    if (!this.wsCloseHandlers.has(ws)) {
+      const handleClose = (): void => {
+        this.unsubscribe(ws);
+        this.wsCloseHandlers.delete(ws);
+        ws.removeListener('close', handleClose);
+      };
+      this.wsCloseHandlers.set(ws, handleClose);
+      ws.on('close', handleClose);
+    }
   }
 
   /**

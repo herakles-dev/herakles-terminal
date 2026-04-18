@@ -45,6 +45,13 @@ export class ContextManager extends EventEmitter {
   /** Last warning threshold emitted per window (prevents duplicate warnings) */
   private lastWarningThreshold: Map<string, number> = new Map();
 
+  /**
+   * Close handlers attached per-WebSocket. One handler per ws unsubscribes
+   * every window belonging to that ws — prevents EventEmitter listener leak
+   * when a single ws hosts N windows.
+   */
+  private wsCloseHandlers: WeakMap<WebSocket, () => void> = new WeakMap();
+
   /** Database reference for window lookups */
   private db: Database.Database | null = null;
 
@@ -274,12 +281,17 @@ export class ContextManager extends EventEmitter {
       this.sendContextSync(ws, windowId, null);
     }
 
-    // Set up cleanup on WebSocket close
-    const handleClose = (): void => {
-      this.unsubscribe(windowId);
-      ws.removeListener('close', handleClose);
-    };
-    ws.on('close', handleClose);
+    // Attach exactly one close handler per ws. The handler unsubscribes every
+    // window owned by this ws — so N windows on one socket => 1 listener, not N.
+    if (!this.wsCloseHandlers.has(ws)) {
+      const handleClose = (): void => {
+        this.unsubscribeAll(ws);
+        this.wsCloseHandlers.delete(ws);
+        ws.removeListener('close', handleClose);
+      };
+      this.wsCloseHandlers.set(ws, handleClose);
+      ws.on('close', handleClose);
+    }
   }
 
   /**

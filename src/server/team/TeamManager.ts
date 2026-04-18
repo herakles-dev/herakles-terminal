@@ -24,6 +24,8 @@ const MAX_LOG_EVENTS = 200;
 
 export class TeamManager extends EventEmitter {
   private subscribers: Set<WebSocket> = new Set();
+  /** One close handler per ws — survives subscribe/unsubscribe cycles. */
+  private wsCloseHandlers: WeakMap<WebSocket, () => void> = new WeakMap();
   private cachedTeams: TeamInfo[] = [];
   /** Track previous task states per team for log event diffing: teamName → Map<agentId, status> */
   private previousTaskStates: Map<string, Map<string, string>> = new Map();
@@ -145,12 +147,17 @@ export class TeamManager extends EventEmitter {
     // Trigger refresh for latest data
     teamFileWatcher.refresh();
 
-    // Cleanup on close
-    const handleClose = () => {
-      this.unsubscribe(ws);
-      ws.removeListener('close', handleClose);
-    };
-    ws.on('close', handleClose);
+    // Attach close handler exactly once per ws. Survives subscribe/unsubscribe
+    // cycles without accumulating listeners.
+    if (!this.wsCloseHandlers.has(ws)) {
+      const handleClose = (): void => {
+        this.unsubscribe(ws);
+        this.wsCloseHandlers.delete(ws);
+        ws.removeListener('close', handleClose);
+      };
+      this.wsCloseHandlers.set(ws, handleClose);
+      ws.on('close', handleClose);
+    }
   }
 
   unsubscribe(ws: WebSocket): void {

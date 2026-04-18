@@ -26,6 +26,9 @@ export class TodoManager extends EventEmitter {
   /** All subscribed WebSocket connections */
   private subscribers: Set<WebSocket> = new Set();
 
+  /** One close handler per ws — survives subscribe/unsubscribe cycles. */
+  private wsCloseHandlers: WeakMap<WebSocket, () => void> = new WeakMap();
+
   /** Cached sessions for new subscribers */
   private cachedSessions: SessionTodos[] = [];
 
@@ -107,12 +110,17 @@ export class TodoManager extends EventEmitter {
     logger.info('TodoManager: Triggering file watcher refresh');
     todoFileWatcher.refresh();
 
-    // Set up cleanup on WebSocket close
-    const handleClose = (): void => {
-      this.unsubscribe(ws);
-      ws.removeListener('close', handleClose);
-    };
-    ws.on('close', handleClose);
+    // Attach close handler exactly once per ws. Survives subscribe/unsubscribe
+    // cycles without accumulating listeners.
+    if (!this.wsCloseHandlers.has(ws)) {
+      const handleClose = (): void => {
+        this.unsubscribe(ws);
+        this.wsCloseHandlers.delete(ws);
+        ws.removeListener('close', handleClose);
+      };
+      this.wsCloseHandlers.set(ws, handleClose);
+      ws.on('close', handleClose);
+    }
   }
 
   /**
