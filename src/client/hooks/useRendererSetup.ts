@@ -190,7 +190,10 @@ export function useRendererSetup(
 
         // STATE: DISPOSING - Clean up old WebGL addon
         setTimeout(() => {
-          if (!mountedRef.current || !term.element) {
+          // Guard against term teardown racing the delayed callback. `term.options`
+          // can be undefined during test teardown or if the terminal was disposed
+          // between context-loss and this tick — touching it would throw.
+          if (!mountedRef.current || !term.element || !term.options) {
             onRecoveryEnd?.(terminalId, false);
             return;
           }
