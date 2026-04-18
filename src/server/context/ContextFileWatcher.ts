@@ -51,7 +51,8 @@ export class ContextFileWatcher extends EventEmitter {
    */
   startWatch(): void {
     if (this.watcher) {
-      this.contextLogger.warn('Context watcher already running');
+      // Idempotent: startWatch() runs on every subscribe by design.
+      this.contextLogger.debug('Context watcher already running — no-op');
       return;
     }
 

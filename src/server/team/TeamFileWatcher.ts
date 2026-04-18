@@ -69,7 +69,8 @@ export class TeamFileWatcher extends EventEmitter {
    */
   start(): void {
     if (this.teamsWatcher) {
-      this.watcherLogger.warn('TeamFileWatcher already running');
+      // Idempotent: start() is called on every subscribe by design. Not a warning.
+      this.watcherLogger.debug('TeamFileWatcher already running — no-op');
       return;
     }
 

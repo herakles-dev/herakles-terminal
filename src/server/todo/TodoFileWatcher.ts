@@ -45,7 +45,8 @@ export class TodoFileWatcher extends EventEmitter {
    */
   startGlobalWatch(): void {
     if (this.globalWatcher) {
-      this.todoLogger.warn('Global watcher already running');
+      // Idempotent: startGlobalWatch() runs on every subscribe by design.
+      this.todoLogger.debug('Global watcher already running — no-op');
       return;
     }
 
