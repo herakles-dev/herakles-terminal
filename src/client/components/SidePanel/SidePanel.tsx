@@ -6,7 +6,9 @@ import SessionPanel from './SessionPanel';
 import SettingsPanel from './SettingsPanel';
 import UploadPanel from './UploadPanel';
 import CanvasPanel from './CanvasPanel';
+import { MetricsPanel } from './MetricsPanel';
 import type { Artifact } from '../../types/canvas';
+import type { ContextUsage } from '../../../shared/contextProtocol';
 
 interface SidePanelProps {
   isOpen: boolean;
@@ -30,9 +32,17 @@ interface SidePanelProps {
   onCanvasSendToTerminal?: (content: string) => void;
   showLightning?: boolean;
   onLightningChange?: (enabled: boolean) => void;
+  // Metrics tab props — wired in App.tsx (Task 10)
+  metricsWs?: WebSocket | null;
+  metricsActiveWindowId?: string | null;
+  metricsActiveWindowName?: string | null;
+  /** Full window list for the per-window picker inside the Metrics tab. */
+  metricsWindows?: Array<{ id: string; name: string; isMain: boolean }>;
+  /** Per-window context usage map — drives picker badges and tint. */
+  metricsContextUsage?: Map<string, ContextUsage>;
 }
 
-type TabId = 'automations' | 'commands' | 'templates' | 'sessions' | 'settings' | 'uploads' | 'canvas';
+type TabId = 'automations' | 'commands' | 'templates' | 'sessions' | 'settings' | 'uploads' | 'canvas' | 'metrics';
 
 interface Tab {
   id: TabId;
@@ -104,16 +114,25 @@ const TABS: Tab[] = [
       </svg>
     ),
   },
+  {
+    id: 'metrics',
+    label: 'METRICS',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+        <path strokeLinecap="square" d="M3 3v18h18M7 16l4-4 4 4 4-6" />
+      </svg>
+    ),
+  },
 ];
 
-export default function SidePanel({ 
-  isOpen, 
-  onClose, 
-  onExecuteCommand, 
-  sessionId, 
-  onSwitchSession, 
-  onPreferencesChange, 
-  isExpanded = false, 
+export default function SidePanel({
+  isOpen,
+  onClose,
+  onExecuteCommand,
+  sessionId,
+  onSwitchSession,
+  onPreferencesChange,
+  isExpanded = false,
   onToggleExpand,
   canvasArtifacts,
   canvasActiveId,
@@ -128,6 +147,11 @@ export default function SidePanel({
   onCanvasSendToTerminal,
   showLightning,
   onLightningChange,
+  metricsWs = null,
+  metricsActiveWindowId = null,
+  metricsActiveWindowName = null,
+  metricsWindows,
+  metricsContextUsage,
 }: SidePanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('commands');
   const [isClosing, setIsClosing] = useState(false);
@@ -301,6 +325,15 @@ export default function SidePanel({
               onSendToTerminal={onCanvasSendToTerminal}
               isExpanded={isExpanded}
               onExpandPanel={onToggleExpand}
+            />
+          )}
+          {activeTab === 'metrics' && (
+            <MetricsPanel
+              ws={metricsWs}
+              activeWindowId={metricsActiveWindowId}
+              activeWindowName={metricsActiveWindowName}
+              windows={metricsWindows}
+              contextUsage={metricsContextUsage}
             />
           )}
         </div>

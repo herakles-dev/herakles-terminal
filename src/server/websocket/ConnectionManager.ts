@@ -17,6 +17,7 @@ import { teamManager } from '../team/TeamManager.js';
 import { stopProtocolManager } from '../stop/StopProtocolManager.js';
 import { todoFileWatcher } from '../todo/TodoFileWatcher.js';
 import { contextManager } from '../context/ContextManager.js';
+import { cliUsageParser } from '../context/CliUsageParser.js';
 import { OutputRingBuffer } from '../window/OutputRingBuffer.js';
 import type { MusicManager } from '../music/MusicManager.js';
 import type { MusicDockState } from '../../shared/musicProtocol.js';
@@ -457,6 +458,14 @@ export class ConnectionManager {
         stopProtocolManager.unsubscribe(connection.ws);
         break;
 
+      case 'metrics:subscribe':
+        this.handleMetricsSubscribe(connection, message.windowId);
+        break;
+
+      case 'metrics:unsubscribe':
+        this.handleMetricsUnsubscribe(connection, message.windowId);
+        break;
+
       case 'stop:activate': {
         const result = stopProtocolManager.activate(
           connection.user.username,
@@ -504,6 +513,16 @@ export class ConnectionManager {
   private handleContextUnsubscribe(_connection: Connection, windowId: string): void {
     if (!windowId) return;
     contextManager.unsubscribe(windowId);
+  }
+
+  private async handleMetricsSubscribe(connection: Connection, windowId: string): Promise<void> {
+    if (!windowId) return;
+    await contextManager.subscribeMetrics(windowId, connection.ws);
+  }
+
+  private handleMetricsUnsubscribe(_connection: Connection, windowId: string): void {
+    if (!windowId) return;
+    contextManager.unsubscribeMetrics(windowId);
   }
 
   private handleMusicSubscribe(connection: Connection): void {
@@ -1228,6 +1247,16 @@ export class ConnectionManager {
                 state.timer = null;
               }
             }, 8);
+          }
+
+          // Best-effort CLI parse for fast agent-activity signals.
+          // JSONL remains source of truth; this supplements it before the
+          // 500ms debounce window closes.
+          const parsedCli = cliUsageParser.scan(data, windowId);
+          if (parsedCli?.agentSpawnDetected) {
+            // Signal ContextManager that agent work is detected for this window.
+            // A full metrics update will arrive once JSONL catches up.
+            contextManager.notifyCliAgentSignal(windowId);
           }
 
           // Get any active connection for this window to check automation

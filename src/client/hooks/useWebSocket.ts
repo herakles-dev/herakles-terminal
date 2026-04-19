@@ -13,6 +13,7 @@ export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'rec
 
 interface WebSocketHook {
   send: (message: object) => void;
+  ws: WebSocket | null;
   state: ConnectionState;
   reconnectIn: number | null;
   reconnectNow: () => void;
@@ -32,6 +33,7 @@ export function useWebSocket({
   const [reconnectIn, setReconnectIn] = useState<number | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [queueLength, setQueueLength] = useState(0);
+  const [wsInstance, setWsInstance] = useState<WebSocket | null>(null);
   
   const wsRef = useRef<WebSocket | null>(null);
   const attemptsRef = useRef(0);
@@ -112,6 +114,7 @@ export function useWebSocket({
     try {
       const ws = new WebSocket(currentUrl);
       wsRef.current = ws;
+      setWsInstance(ws);
 
       ws.onopen = () => {
         isConnectingRef.current = false;
@@ -160,6 +163,7 @@ export function useWebSocket({
         isConnectingRef.current = false;
         clearTimers();
         wsRef.current = null;
+        setWsInstance(null);
         
         if (event.code === 4001) {
           updateState('disconnected');
@@ -299,6 +303,7 @@ export function useWebSocket({
 
   return {
     send,
+    ws: wsInstance,
     state,
     reconnectIn,
     reconnectNow,

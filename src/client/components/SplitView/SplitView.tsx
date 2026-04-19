@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useOptionalResizeCoordinator } from '../../contexts/ResizeCoordinatorContext';
-import { ContextIndicator } from '../ContextIndicator';
+import { ContextProgressBar } from '../ContextProgressBar';
 import type { ContextUsage } from '../../../shared/contextProtocol';
+import { tokenColorBand } from '../../../shared/contextProtocol';
 
 interface WindowConfig {
   id: string;
@@ -837,41 +838,62 @@ export default function SplitView({
         {/* Slim tab bar — always visible, even with 1 window */}
         <div className="flex items-center bg-[#0a0a0f] border-b border-[#27272a]" style={{ minHeight: 32, paddingLeft: 'env(safe-area-inset-left, 0)', paddingRight: 'env(safe-area-inset-right, 0)' }}>
           <div className="flex flex-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-            {visibleWindows.map((window) => (
-              <div
-                key={window.id}
-                className={`flex items-center min-w-0 transition-colors ${
-                  mobileActiveTab === window.id
-                    ? 'bg-[#18181b] border-b border-[#00d4ff]'
-                    : 'hover:bg-[#18181b]/50'
-                }`}
-                style={{ maxWidth: 160 }}
-              >
-                <button
-                  onClick={() => {
-                    setMobileActiveTab(window.id);
-                    onWindowFocus(window.id);
-                  }}
-                  className={`flex items-center gap-1.5 pl-2.5 pr-1 py-1.5 min-w-0 text-xs ${
-                    mobileActiveTab === window.id ? 'text-white' : 'text-[#71717a]'
+            {visibleWindows.map((window) => {
+              const u = contextUsage?.get(window.id);
+              const band = u ? tokenColorBand(u.usedTokens) : null;
+              const fillRgb = band === 'green' ? '34,197,94' : band === 'yellow' ? '234,179,8' : band === 'red' ? '239,68,68' : null;
+              const fillPct = u ? Math.min(100, Math.max(0, u.percentage)) : 0;
+              return (
+                <div
+                  key={window.id}
+                  className={`relative flex items-center min-w-0 overflow-hidden transition-colors ${
+                    mobileActiveTab === window.id
+                      ? 'bg-[#18181b] border-b border-[#00d4ff]'
+                      : 'hover:bg-[#18181b]/50'
                   }`}
+                  style={{ maxWidth: 160 }}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${window.isMain ? 'bg-[#00d4ff]' : 'bg-[#22c55e]'}`} />
-                  <span className="truncate">{window.name}</span>
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onWindowClose(window.id);
-                  }}
-                  className="flex-shrink-0 p-2 mr-0.5 text-[#52525b] hover:text-[#ef4444] rounded transition-colors"
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            ))}
+                  {/* Context tint fill: absolute band behind tab content */}
+                  {fillRgb && (
+                    <div
+                      aria-hidden
+                      className="absolute inset-y-0 left-0 pointer-events-none"
+                      style={{
+                        width: `${fillPct}%`,
+                        background: `linear-gradient(90deg, rgba(${fillRgb},0.22) 0%, rgba(${fillRgb},0.12) 70%, rgba(${fillRgb},0.04) 100%)`,
+                        transition: 'width 0.3s ease-in-out, background 0.3s ease-in-out',
+                        zIndex: 0,
+                      }}
+                    />
+                  )}
+                  <button
+                    onClick={() => {
+                      setMobileActiveTab(window.id);
+                      onWindowFocus(window.id);
+                    }}
+                    className={`relative flex items-center gap-1.5 pl-2.5 pr-1 py-1.5 min-w-0 text-xs ${
+                      mobileActiveTab === window.id ? 'text-white' : 'text-[#71717a]'
+                    }`}
+                    style={{ zIndex: 1 }}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${window.isMain ? 'bg-[#00d4ff]' : 'bg-[#22c55e]'}`} />
+                    <span className="truncate">{window.name}</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onWindowClose(window.id);
+                    }}
+                    className="relative flex-shrink-0 p-2 mr-0.5 text-[#52525b] hover:text-[#ef4444] rounded transition-colors"
+                    style={{ zIndex: 1 }}
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <button
             onClick={onAddWindow}
@@ -1046,25 +1068,50 @@ export default function SplitView({
           onClick={(e) => !window.isMinimized && handleWindowClick(e, window.id)}
         >
           <div
-            className={`relative flex items-center justify-between px-3 py-1.5 border-b cursor-move select-none window-header ${
+            className={`relative flex items-center justify-between px-3 py-1.5 border-b cursor-move select-none window-header overflow-hidden ${
               activeWindowId === window.id
                 ? 'bg-gradient-to-r from-[#0c0c14] via-[#0f0f18] to-[#0c0c14] border-white/[0.06]'
                 : 'bg-[#0a0a0f] border-white/[0.04]'
             }`}
             onMouseDown={(e) => handleDragStart(e, window)}
           >
-            {activeWindowId === window.id && (
-              <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />
+            {/* Context tint fill: colored band behind the tab content, width = usage % */}
+            {(() => {
+              const u = contextUsage?.get(window.id);
+              if (!u) return null;
+              const band = tokenColorBand(u.usedTokens);
+              const fillRgb = band === 'green' ? '34,197,94' : band === 'yellow' ? '234,179,8' : '239,68,68';
+              const fillPct = Math.min(100, Math.max(0, u.percentage));
+              return (
+                <div
+                  aria-hidden
+                  className="absolute inset-y-0 left-0 pointer-events-none"
+                  style={{
+                    width: `${fillPct}%`,
+                    background: `linear-gradient(90deg, rgba(${fillRgb},0.18) 0%, rgba(${fillRgb},0.10) 70%, rgba(${fillRgb},0.04) 100%)`,
+                    transition: 'width 0.3s ease-in-out, background 0.3s ease-in-out',
+                    zIndex: 0,
+                  }}
+                />
+              );
+            })()}
+
+            {/* Progress bar at bottom of header — replaces gradient separator when context data exists */}
+            {contextUsage?.get(window.id) ? (
+              <div className="absolute inset-x-0 bottom-0" style={{ zIndex: 1 }}>
+                <ContextProgressBar usage={contextUsage.get(window.id) || null} height={2} />
+              </div>
+            ) : (
+              activeWindowId === window.id && (
+                <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#00d4ff]/20 to-transparent" />
+              )
             )}
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 relative" style={{ zIndex: 2 }}>
               <span className={`w-2.5 h-2.5 rounded-full transition-all duration-200 ${
                 window.isMain
                   ? 'bg-[#00d4ff] shadow-[0_0_8px_rgba(0,212,255,0.5)]'
                   : 'bg-[#22c55e] shadow-[0_0_6px_rgba(34,197,94,0.4)]'
               }`} />
-              {contextUsage?.get(window.id) && (
-                <ContextIndicator usage={contextUsage.get(window.id) || null} size={18} />
-              )}
               {todoCount !== undefined && todoCount > 0 && activeWindowId === window.id && (
                 <span className={`
                   min-w-[16px] h-[16px] flex items-center justify-center
@@ -1118,7 +1165,7 @@ export default function SplitView({
                 </span>
               )}
             </div>
-            <div className="window-controls flex items-center gap-0.5">
+            <div className="window-controls flex items-center gap-0.5 relative" style={{ zIndex: 2 }}>
               <button
                 onClick={() => onWindowMinimize(window.id)}
                 className="p-1.5 text-[#8a8a92] hover:text-[#fbbf24] hover:bg-[#fbbf24]/10 rounded-md transition-all duration-150"

@@ -811,7 +811,7 @@ export default function App() {
     return `${protocol}//${window.location.host}${wsPath}`;
   }, [showWelcome]);
 
-  const { send: wsSend, state: connectionState, reconnectIn, reconnectNow, latency } = useWebSocket({
+  const { send: wsSend, ws: wsInstance, state: connectionState, reconnectIn, reconnectNow, latency } = useWebSocket({
     url: wsUrl || 'ws://localhost',
     onMessage: handleMessage,
     onStateChange: handleStateChange,
@@ -820,6 +820,33 @@ export default function App() {
   useEffect(() => {
     sendMessageRef.current = wsSend;
   }, [wsSend]);
+
+  // Ensure every known window has an active context:subscribe, not just the
+  // one that most recently fired handleTerminalReady. Covers: minimized
+  // windows, offscreen/zoomed-out windows, and mobile where only one terminal
+  // may be mounted at a time. Re-runs whenever the window list or connection
+  // state changes, and dedupes via a ref so we don't spam subscribes.
+  const subscribedContextWindowsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (connectionState !== 'connected') {
+      subscribedContextWindowsRef.current.clear();
+      return;
+    }
+    const subscribed = subscribedContextWindowsRef.current;
+    for (const w of windows) {
+      if (!subscribed.has(w.id)) {
+        wsSend({ type: 'context:subscribe', windowId: w.id });
+        subscribed.add(w.id);
+      }
+    }
+    // Unsubscribe windows that no longer exist
+    for (const id of Array.from(subscribed)) {
+      if (!windows.some(w => w.id === id)) {
+        wsSend({ type: 'context:unsubscribe', windowId: id });
+        subscribed.delete(id);
+      }
+    }
+  }, [windows, connectionState, wsSend]);
 
   // Team cockpit integration
   const { activeTeam, cockpitEnabled, handleTeamMessage, dismissed, setDismissed, logEvents, expandedAgent, setExpandedAgent } = useTeamCockpit({
@@ -2011,6 +2038,11 @@ export default function App() {
           onCanvasSendToTerminal={handleSendArtifactToTerminal}
           showLightning={showLightning}
           onLightningChange={setShowLightning}
+          metricsWs={wsInstance}
+          metricsActiveWindowId={activeWindowId}
+          metricsActiveWindowName={windows.find(w => w.id === activeWindowId)?.name ?? null}
+          metricsWindows={windows.map(w => ({ id: w.id, name: w.name, isMain: w.isMain }))}
+          metricsContextUsage={contextUsage}
         />
         <TerminalMinimap
           terminal={getActiveTerminal()}

@@ -151,6 +151,14 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('stop:unsubscribe'),
   }),
+  z.object({
+    type: z.literal('metrics:subscribe'),
+    windowId: uuidSchema,
+  }),
+  z.object({
+    type: z.literal('metrics:unsubscribe'),
+    windowId: uuidSchema,
+  }),
 ]);
 
 export type ValidatedClientMessage = z.infer<typeof ClientMessageSchema>;
